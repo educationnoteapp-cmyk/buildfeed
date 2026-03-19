@@ -6,7 +6,7 @@ import Logo from '@/components/ui/Logo'
 
 export const metadata: Metadata = {
   title: 'BuildFeed — Discovery for Builders',
-  description: 'The Discovery Layer for B2B DevTools.',
+  description: 'The Discovery Layer for B2B DevTools. Smart Audio-Slides demos by developers, for developers.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -31,4 +31,3 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     </html>
   )
 }
- 
