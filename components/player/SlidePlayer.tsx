@@ -44,7 +44,8 @@ export default function SlidePlayer({
   const touchStartX = useRef(0)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const slide = slides[current]
+  const slide = slides[Math.min(current, slides.length - 1)]
+if (!slide) return null
 
   // Landscape detection
   useEffect(() => {
