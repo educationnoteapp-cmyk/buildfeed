@@ -5,8 +5,8 @@ import HeaderNav from '@/components/ui/HeaderNav'
 import Logo from '@/components/ui/Logo'
 
 export const metadata: Metadata = {
-  title: 'BuildFeed — Discovery for Builders',
-  description: 'The Discovery Layer for B2B DevTools. Smart Audio-Slides demos by developers, for developers.',
+  title: 'BuildFeed',
+  description: 'The Discovery Layer for B2B DevTools.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -17,9 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
             <a href="/" className="flex items-center gap-2">
               <Logo size={28} />
-              <span className="text-lg font-bold text-text-main tracking-tight">
-                Build<span className="text-primary">Feed</span>
-              </span>
+              <span className="text-lg font-bold text-text-main tracking-tight">Build<span className="text-primary">Feed</span></span>
               <span className="text-xs text-muted bg-surface border border-border px-1.5 py-0.5 rounded-md">beta</span>
             </a>
             <HeaderNav />
