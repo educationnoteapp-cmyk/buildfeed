@@ -41,6 +41,10 @@ export interface Post {
   sandbox_opens: number
   link_clicks: number
   published_at: string | null
+  bg_audio_url?: string | null
+  bg_audio_volume?: number | null
+  try_video_url?: string | null
+  try_video_duration?: number | null
   created_at: string
   updated_at?: string
   creator?: Profile
@@ -59,6 +63,11 @@ export interface Slide {
   code_content: string | null
   code_language: string | null
   hotspot_url: string | null
+  hotspot_x?: number | null
+  hotspot_y?: number | null
+  hotspot_label?: string | null
+  slide_duration_seconds?: number | null
+  audio_volume?: number | null
   created_at: string
   updated_at?: string
 }

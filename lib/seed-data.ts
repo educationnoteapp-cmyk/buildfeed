@@ -51,6 +51,7 @@ export const SEED_POSTS: Post[] = [
         code_content: null,
         code_language: null,
         hotspot_url: null,
+        slide_duration_seconds: 3,
         created_at: '2026-03-15T09:00:00Z',
       },
       {
@@ -79,6 +80,7 @@ const response = await cache.wrap(
 // Cache hit → 0ms, $0.00`,
         code_language: 'typescript',
         hotspot_url: null,
+        slide_duration_seconds: 3,
         created_at: '2026-03-15T09:00:00Z',
       },
       {
@@ -92,6 +94,7 @@ const response = await cache.wrap(
         code_content: null,
         code_language: null,
         hotspot_url: null,
+        slide_duration_seconds: 3,
         created_at: '2026-03-15T09:00:00Z',
       },
       {
@@ -105,6 +108,7 @@ const response = await cache.wrap(
         code_content: null,
         code_language: null,
         hotspot_url: null,
+        slide_duration_seconds: 3,
         created_at: '2026-03-15T09:00:00Z',
       },
       {
@@ -118,6 +122,7 @@ const response = await cache.wrap(
         code_content: null,
         code_language: null,
         hotspot_url: 'https://example.com',
+        slide_duration_seconds: 3,
         created_at: '2026-03-15T09:00:00Z',
       },
     ],

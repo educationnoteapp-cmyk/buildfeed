@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { ArrowLeft, Github, Twitter, Zap } from 'lucide-react'
 import { CATEGORIES } from '@/lib/types'
 import PostCard from '@/components/feed/PostCard'
+import FollowButtonWrapper from '@/components/ui/FollowButtonWrapper'
 
 export default async function CreatorPage({ params }: { params: { username: string } }) {
   const supabase = createClient()
@@ -30,6 +31,7 @@ export default async function CreatorPage({ params }: { params: { username: stri
 
   const category = CATEGORIES.find(c => c.id === creator.primary_category)
   const totalViews = sortedPosts.reduce((s, p) => s + (p.view_count ?? 0), 0)
+  const viewsDisplay = totalViews >= 1000 ? (totalViews / 1000).toFixed(1) + 'k' : String(totalViews)
 
   return (
     <div className="min-h-screen bg-background">
@@ -48,7 +50,6 @@ export default async function CreatorPage({ params }: { params: { username: stri
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
-        {/* Profile header */}
         <div className="flex items-start gap-5 mb-8">
           <div className="w-16 h-16 rounded-2xl bg-primary/20 overflow-hidden flex-shrink-0">
             {creator.avatar_url && (
@@ -92,22 +93,21 @@ export default async function CreatorPage({ params }: { params: { username: stri
             </div>
           </div>
 
-          {/* Stats */}
-          <div className="flex gap-4 text-center flex-shrink-0">
-            <div>
-              <p className="text-lg font-bold text-text-main">{sortedPosts.length}</p>
-              <p className="text-xs text-muted">פוסטים</p>
-            </div>
-            <div>
-              <p className="text-lg font-bold text-text-main">
-                {totalViews >= 1000 ? `${(totalViews / 1000).toFixed(1)}k` : totalViews}
-              </p>
-              <p className="text-xs text-muted">צפיות</p>
+          <div className="flex flex-col items-end gap-3 flex-shrink-0">
+            <FollowButtonWrapper targetId={creator.id} type="creator" />
+            <div className="flex gap-4 text-center">
+              <div>
+                <p className="text-lg font-bold text-text-main">{sortedPosts.length}</p>
+                <p className="text-xs text-muted">פוסטים</p>
+              </div>
+              <div>
+                <p className="text-lg font-bold text-text-main">{viewsDisplay}</p>
+                <p className="text-xs text-muted">צפיות</p>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Posts grid */}
         {sortedPosts.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {sortedPosts.map(post => (

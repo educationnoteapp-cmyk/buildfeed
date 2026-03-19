@@ -1,256 +1,250 @@
 'use client'
-import { useState, useEffect, useRef, useCallback } from 'react'
+
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Play, Pause, ChevronLeft, ChevronRight, Volume2, VolumeX, Maximize2 } from 'lucide-react'
 import { Slide } from '@/lib/types'
 import SlideView from './SlideView'
+import PlayerActionsMenu from './PlayerActionsMenu'
 
 interface SlidePlayerProps {
   slides: Slide[]
   title: string
   autoPlay?: boolean
   onComplete?: () => void
-  onSandboxOpen?: () => void
+  bgAudioUrl?: string | null
+  bgAudioVolume?: number
+  playerMode?: 'auto' | 'manual'
+  defaultMuted?: boolean
+  postId?: string
+  creatorId?: string
+  tryVideoUrl?: string | null
+  websiteUrl?: string | null
+  githubUrl?: string | null
 }
 
-const MIN_SLIDE_DURATION = 2000 // 2s minimum per slide
+const MIN_SLIDE_MS = 2000
 
-export default function SlidePlayer({ slides, title, autoPlay = false, onComplete, onSandboxOpen }: SlidePlayerProps) {
-  const [currentIndex, setCurrentIndex] = useState(0)
+export default function SlidePlayer({
+  slides, title, autoPlay = false, onComplete,
+  bgAudioUrl, bgAudioVolume = 0.3,
+  postId, creatorId, tryVideoUrl, websiteUrl, githubUrl,
+  playerMode = 'auto', defaultMuted = false,
+}: SlidePlayerProps) {
+  const [current, setCurrent] = useState(0)
   const [isPlaying, setIsPlaying] = useState(autoPlay)
   const [isStarted, setIsStarted] = useState(autoPlay)
+  const [isMuted, setIsMuted] = useState(defaultMuted)
   const [progress, setProgress] = useState(0)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-  const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const progressRef = useRef<NodeJS.Timeout | null>(null)
-  const startTimeRef = useRef<number>(0)
-  const touchStartX = useRef<number>(0)
+  const [isLandscape, setIsLandscape] = useState(false)
 
-  const currentSlide = slides[currentIndex]
-  const isLast = currentIndex === slides.length - 1
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const bgAudioRef = useRef<HTMLAudioElement | null>(null)
+  const progTimer = useRef<NodeJS.Timeout | null>(null)
+  const slideTimer = useRef<NodeJS.Timeout | null>(null)
+  const touchStartX = useRef(0)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const slide = slides[current]
+
+  // Landscape detection
+  useEffect(() => {
+    const check = () => {
+      if (typeof window !== 'undefined') {
+        setIsLandscape(window.innerWidth > window.innerHeight && window.innerWidth < 1024)
+      }
+    }
+    check()
+    window.addEventListener('resize', check)
+    window.addEventListener('orientationchange', () => setTimeout(check, 100))
+    return () => { window.removeEventListener('resize', check); window.removeEventListener('orientationchange', check) }
+  }, [])
 
   const clearTimers = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current)
-    if (progressRef.current) clearInterval(progressRef.current)
+    if (progTimer.current) clearInterval(progTimer.current)
+    if (slideTimer.current) clearTimeout(slideTimer.current)
   }, [])
+
+  const stopAudio = useCallback(() => {
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; audioRef.current = null }
+  }, [])
+
+  const goNext = useCallback(() => {
+    if (current < slides.length - 1) { setCurrent(c => c + 1) }
+    else { setIsPlaying(false); setProgress(100); onComplete?.() }
+  }, [current, slides.length, onComplete])
 
   const goToSlide = useCallback((idx: number) => {
     if (idx < 0 || idx >= slides.length) return
+    clearTimers(); stopAudio(); setProgress(0); setCurrent(idx)
+  }, [slides.length, clearTimers, stopAudio])
+
+  const playSlide = useCallback((s: Slide) => {
     clearTimers()
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.src = ''
-    }
-    setProgress(0)
-    setCurrentIndex(idx)
-  }, [slides.length, clearTimers])
+    const duration = s.audio_url
+      ? (s.audio_duration_seconds ?? 3) * 1000
+      : Math.max((s.slide_duration_seconds ?? 3) * 1000, MIN_SLIDE_MS)
+    const start = Date.now()
 
-  const nextSlide = useCallback(() => {
-    if (isLast) {
-      setIsPlaying(false)
-      onComplete?.()
-    } else {
-      goToSlide(currentIndex + 1)
-    }
-  }, [isLast, currentIndex, goToSlide, onComplete])
-
-  const prevSlide = useCallback(() => {
-    goToSlide(currentIndex - 1)
-  }, [currentIndex, goToSlide])
-
-  const startSlideTimer = useCallback((durationMs: number) => {
-    clearTimers()
-    setProgress(0)
-    startTimeRef.current = Date.now()
-
-    progressRef.current = setInterval(() => {
-      const elapsed = Date.now() - startTimeRef.current
-      setProgress(Math.min(elapsed / durationMs, 1))
+    progTimer.current = setInterval(() => {
+      const pct = Math.min(100, (Date.now() - start) / duration * 100)
+      setProgress(pct)
+      if (pct >= 100) clearInterval(progTimer.current!)
     }, 50)
 
-    timerRef.current = setTimeout(() => {
-      clearInterval(progressRef.current!)
-      setProgress(1)
-      nextSlide()
-    }, durationMs)
-  }, [clearTimers, nextSlide])
-
-  // Play current slide when playing state changes or slide changes
-  useEffect(() => {
-    if (!isPlaying || !currentSlide) return
-
-    const audioUrl = currentSlide.audio_url
-    const duration = (currentSlide.audio_duration_seconds || 5) * 1000
-    const effectiveDuration = Math.max(duration, MIN_SLIDE_DURATION)
-
-    if (audioUrl) {
-      const audio = new Audio(audioUrl)
+    if (s.audio_url) {
+      const audio = new Audio(s.audio_url)
+      audio.muted = isMuted
+      audio.volume = s.audio_volume ?? 1.0
       audioRef.current = audio
-      audio.play().catch(() => {
-        // Fallback to timer if audio fails
-        startSlideTimer(effectiveDuration)
-      })
-      audio.addEventListener('ended', () => {
-        setTimeout(() => nextSlide(), 300)
-      })
-      startSlideTimer(effectiveDuration)
+      audio.onended = () => {
+        clearTimers(); setProgress(100)
+        if (playerMode === 'manual') return // ידני — לא עובר אוטומטית
+        const wait = Math.max(0, MIN_SLIDE_MS - (Date.now() - start))
+        slideTimer.current = setTimeout(goNext, wait)
+      }
+      audio.onerror = () => { slideTimer.current = setTimeout(goNext, duration) }
+      audio.play().catch(() => { slideTimer.current = setTimeout(goNext, duration) })
     } else {
-      // No audio — use duration as timer
-      startSlideTimer(effectiveDuration)
-    }
-
-    return () => {
-      clearTimers()
-      if (audioRef.current) {
-        audioRef.current.pause()
-        audioRef.current = null
+      if (playerMode !== 'manual') {
+        slideTimer.current = setTimeout(goNext, duration)
       }
     }
-  }, [isPlaying, currentIndex]) // eslint-disable-line
+  }, [isMuted, goNext, clearTimers])
 
-  const handleStart = () => {
-    setIsStarted(true)
-    setIsPlaying(true)
-  }
-
-  const togglePlay = () => {
-    if (!isStarted) {
-      handleStart()
-      return
-    }
-    if (isPlaying) {
-      clearTimers()
-      audioRef.current?.pause()
-      setIsPlaying(false)
-    } else {
-      audioRef.current?.play()
-      setIsPlaying(true)
-    }
-  }
-
-  // Touch/swipe handlers
-  const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX
-  }
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    const diff = touchStartX.current - e.changedTouches[0].clientX
-    if (Math.abs(diff) > 50) {
-      if (diff > 0) nextSlide()
-      else prevSlide()
-    }
-  }
-
-  // Keyboard navigation
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextSlide() }
-      if (e.key === 'ArrowLeft') { e.preventDefault(); prevSlide() }
+    if (isPlaying && isStarted) playSlide(slides[current])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, isPlaying])
+
+  useEffect(() => {
+    if (autoPlay) {
+      playSlide(slides[0])
+      bgAudioRef.current?.play().catch(() => {})
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [nextSlide, prevSlide])
+    return () => { clearTimers(); stopAudio() }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!bgAudioUrl) return
+    const bg = new Audio(bgAudioUrl)
+    bg.loop = true; bg.volume = bgAudioVolume
+    bgAudioRef.current = bg
+    return () => { bg.pause(); bg.src = '' }
+  }, [bgAudioUrl, bgAudioVolume])
+
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.muted = isMuted
+  }, [isMuted])
+
+  const handlePause = useCallback(() => {
+    clearTimers(); stopAudio(); bgAudioRef.current?.pause(); setIsPlaying(false)
+  }, [clearTimers, stopAudio])
+
+  const handleResume = useCallback(() => {
+    setIsPlaying(true); playSlide(slides[current])
+    bgAudioRef.current?.play().catch(() => {})
+  }, [playSlide, slides, current])
+
+  const togglePlay = useCallback(() => {
+    if (!isStarted) { setIsStarted(true); setIsPlaying(true); playSlide(slides[current]); bgAudioRef.current?.play().catch(() => {}); return }
+    if (isPlaying) handlePause(); else handleResume()
+  }, [isStarted, isPlaying, slides, current, playSlide, handlePause, handleResume])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight') goToSlide(current + 1)
+      if (e.key === 'ArrowLeft') goToSlide(current - 1)
+      if (e.key === ' ') { e.preventDefault(); togglePlay() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [current, togglePlay, goToSlide])
+
+  const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX }
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const dx = e.changedTouches[0].clientX - touchStartX.current
+    if (Math.abs(dx) > 50) { if (dx < 0) goToSlide(current + 1); else goToSlide(current - 1) }
+  }
+
+  // Landscape: fullscreen on mobile
+  const containerClass = isLandscape
+    ? 'fixed inset-0 z-50 bg-black'
+    : 'relative w-full bg-background rounded-xl overflow-hidden'
+
+  const aspectStyle = isLandscape ? {} : { aspectRatio: '16/9' }
 
   return (
     <div
-      className="relative w-full rounded-2xl overflow-hidden bg-surface"
-      style={{ aspectRatio: '16/9' }}
+      ref={containerRef}
+      className={containerClass}
+      style={aspectStyle}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Slides */}
-      <div className="relative w-full h-full">
-        {slides.map((slide, idx) => (
-          <div
-            key={slide.id}
-            className={`absolute inset-0 transition-opacity duration-300 ${
-              idx === currentIndex ? 'opacity-100' : 'opacity-0 pointer-events-none'
-            }`}
-          >
-            <SlideView slide={slide} isActive={idx === currentIndex} />
-          </div>
-        ))}
+      {/* Slide */}
+      <div className="absolute inset-0">
+        <SlideView slide={slide} isActive />
       </div>
 
-      {/* Start overlay (iOS: needs user gesture) */}
+      {/* Start overlay */}
       {!isStarted && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-20">
-          <button
-            onClick={handleStart}
-            className="w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-2xl shadow-primary/40 hover:bg-primary/90 transition-all transform hover:scale-110"
-          >
-            <svg className="w-8 h-8 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          </button>
-          <p className="text-white/70 text-sm mt-4 font-medium">
-            {slides.length <= 8 ? '⚡ Snap' : '📺 Demo'} · {slides.length} slides
-          </p>
+        <div className="absolute inset-0 bg-black/60 flex items-center justify-center cursor-pointer z-10" onClick={togglePlay}>
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center hover:bg-white/30 transition-colors">
+              <Play size={28} className="text-white ml-1" fill="white" />
+            </div>
+            <span className="text-white/80 text-sm font-medium text-center px-4">{title}</span>
+          </div>
         </div>
       )}
 
-      {/* Progress bar segments */}
-      <div className="absolute top-0 left-0 right-0 z-10 flex gap-1 p-2">
-        {slides.map((_, idx) => (
-          <div key={idx} className="flex-1 h-[3px] bg-white/25 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-white rounded-full transition-none"
-              style={{
-                width: idx < currentIndex ? '100%'
-                  : idx === currentIndex ? `${progress * 100}%`
-                  : '0%'
-              }}
-            />
+      {/* Progress bars */}
+      <div className="absolute top-0 left-0 right-0 flex gap-1 p-2 z-20">
+        {slides.map((_, i) => (
+          <div key={i} className="h-0.5 flex-1 bg-white/25 rounded-full overflow-hidden cursor-pointer" onClick={() => goToSlide(i)}>
+            <div className="h-full bg-white rounded-full transition-none"
+              style={{ width: i < current ? '100%' : i === current ? progress + '%' : '0%' }} />
           </div>
         ))}
       </div>
 
-      {/* Controls overlay */}
-      {isStarted && (
-        <div className="absolute inset-0 z-10 flex">
-          {/* Prev zone */}
-          <div
-            className="w-1/3 h-full cursor-pointer flex items-center pl-3 group"
-            onClick={prevSlide}
-          >
-            {currentIndex > 0 && (
-              <div className="opacity-0 group-hover:opacity-100 transition-opacity w-8 h-8 rounded-full bg-black/50 flex items-center justify-center">
-                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-                </svg>
-              </div>
-            )}
-          </div>
-
-          {/* Center — play/pause tap */}
-          <div className="w-1/3 h-full flex items-center justify-center cursor-pointer" onClick={togglePlay}>
-            {!isPlaying && (
-              <div className="w-14 h-14 rounded-full bg-black/60 flex items-center justify-center">
-                <svg className="w-7 h-7 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </div>
-            )}
-          </div>
-
-          {/* Next zone */}
-          <div
-            className="w-1/3 h-full cursor-pointer flex items-center justify-end pr-3 group"
-            onClick={nextSlide}
-          >
-            {!isLast && (
-              <div className="opacity-0 group-hover:opacity-100 transition-opacity w-8 h-8 rounded-full bg-black/50 flex items-center justify-center">
-                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
-                </svg>
-              </div>
-            )}
-          </div>
-        </div>
+      {/* Nav arrows */}
+      {current > 0 && (
+        <button onClick={() => goToSlide(current - 1)} className="absolute left-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors">
+          <ChevronLeft size={18} />
+        </button>
+      )}
+      {current < slides.length - 1 && (
+        <button onClick={() => goToSlide(current + 1)} className="absolute right-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors">
+          <ChevronRight size={18} />
+        </button>
       )}
 
-      {/* Slide counter */}
-      {isStarted && (
-        <div className="absolute bottom-3 right-3 z-10 bg-black/60 text-white/80 text-xs px-2 py-1 rounded-full font-mono">
-          {currentIndex + 1} / {slides.length}
+      {/* Bottom controls */}
+      <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/70 to-transparent px-3 pb-3 pt-8 flex items-center justify-between">
+        <button onClick={togglePlay} className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors">
+          {isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" className="ml-0.5" />}
+        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-white/70 text-xs font-mono">{current + 1} / {slides.length}</span>
+          <button onClick={() => setIsMuted(m => !m)} className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors">
+            {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+          </button>
         </div>
+      </div>
+
+      {/* Actions menu — חץ + תפריט */}
+      {postId && creatorId && (
+        <PlayerActionsMenu
+          postId={postId}
+          creatorId={creatorId}
+          tryVideoUrl={tryVideoUrl}
+          websiteUrl={websiteUrl}
+          githubUrl={githubUrl}
+          onPause={handlePause}
+          onResume={handleResume}
+        />
       )}
     </div>
   )

@@ -6,6 +6,8 @@ export const metadata: Metadata = {
   description: 'The Discovery Layer for B2B DevTools. Smart Audio-Slides demos by developers, for developers.',
 }
 
+import BottomNav from '@/components/ui/BottomNav'
+
 export default function RootLayout({
   children,
 }: {

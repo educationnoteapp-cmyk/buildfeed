@@ -1,130 +1,111 @@
 'use client'
+
 import { useState } from 'react'
-import { Post, CATEGORIES, PRODUCT_TYPES } from '@/lib/types'
-import SlidePlayer from '../player/SlidePlayer'
 import Link from 'next/link'
 import Image from 'next/image'
+import { Eye, Zap, Play, ExternalLink } from 'lucide-react'
+import { Post, CATEGORIES } from '@/lib/types'
+import SlidePlayer from '@/components/player/SlidePlayer'
 
 interface PostCardProps {
   post: Post
 }
 
 export default function PostCard({ post }: PostCardProps) {
-  const [expanded, setExpanded] = useState(false)
-  const category = CATEGORIES.find(c => c.id === post.category)
+  const [isExpanded, setIsExpanded] = useState(false)
 
-  const thumbSlide = post.slides?.[0]
-  const thumbUrl = thumbSlide?.image_url
+  const category = CATEGORIES.find(c => c.id === post.category)
+  const firstSlide = post.slides?.[0]
+  const thumbUrl = firstSlide?.slide_type !== 'code' ? firstSlide?.image_url : null
+
+  const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)
 
   return (
-    <article className="bg-surface border border-border rounded-2xl overflow-hidden hover:border-[#3A3A3A] transition-colors group">
-      {/* Thumbnail / Player */}
-      <div
-        className="relative cursor-pointer"
-        style={{ aspectRatio: '16/9' }}
-        onClick={() => !expanded && setExpanded(true)}
-      >
-        {expanded && post.slides ? (
-          <SlidePlayer
-            slides={post.slides}
-            title={post.title}
-            autoPlay
-            onComplete={() => {}}
-          />
+    <article className="group bg-surface border border-border rounded-2xl overflow-hidden hover:border-white/10 transition-all duration-200 hover:-translate-y-0.5">
+      <div className="relative">
+        {isExpanded && post.slides ? (
+          <SlidePlayer slides={post.slides} title={post.title} />
         ) : (
-          <>
+          <div
+            className="relative aspect-video bg-[#0A0A0F] cursor-pointer overflow-hidden"
+            onClick={() => setIsExpanded(true)}
+          >
             {thumbUrl ? (
               <Image
                 src={thumbUrl}
                 alt={post.title}
                 fill
-                className="object-cover group-hover:scale-[1.02] transition-transform duration-500"
+                className="object-cover opacity-75 group-hover:opacity-90 group-hover:scale-105 transition-all duration-500"
               />
             ) : (
-              <div className="w-full h-full bg-[#111] flex items-center justify-center">
-                <span className="text-4xl">{category?.label.split(' ')[0]}</span>
-              </div>
+              <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-secondary/20" />
             )}
-            {/* Play overlay */}
-            <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
-              <div className="w-16 h-16 rounded-full bg-primary/90 flex items-center justify-center shadow-2xl shadow-primary/30 transform group-hover:scale-110 transition-transform">
-                <svg className="w-7 h-7 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </div>
-            </div>
-            {/* Format badge */}
+            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
             <div className="absolute top-3 left-3">
-              <span className={`text-xs font-semibold px-2 py-1 rounded-full ${
+              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full backdrop-blur-sm ${
                 post.format === 'snap'
-                  ? 'bg-primary/90 text-white'
-                  : 'bg-secondary/90 text-white'
+                  ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
+                  : 'bg-blue-400/20 text-blue-300 border border-blue-400/30'
               }`}>
-                {post.format === 'snap' ? '⚡ Snap' : '📺 Demo'}
+                {post.format === 'snap' ? 'Snap' : 'Demo'}
               </span>
             </div>
-            {/* Slide count */}
-            <div className="absolute top-3 right-3 bg-black/60 text-white/80 text-xs px-2 py-1 rounded-full font-mono">
-              {post.slide_count} slides
+            <div className="absolute top-3 right-3">
+              <span className="text-xs text-white/60 bg-black/40 backdrop-blur-sm px-2 py-0.5 rounded-full">
+                {post.slide_count} slides
+              </span>
             </div>
-          </>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-full bg-white/15 backdrop-blur-sm border border-white/20 flex items-center justify-center group-hover:bg-white/25 group-hover:scale-110 transition-all duration-200">
+                <Play size={18} className="text-white ml-0.5" fill="white" />
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
-      {/* Info */}
       <div className="p-4">
-        {/* Creator */}
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-7 h-7 rounded-full overflow-hidden bg-border flex-shrink-0">
+        <div className="flex items-center gap-2 mb-2.5">
+          <div className="w-5 h-5 rounded-full bg-primary/30 overflow-hidden flex-shrink-0 ring-1 ring-primary/20">
             {post.creator?.avatar_url && (
-              <Image
-                src={post.creator.avatar_url}
-                alt={post.creator.display_name || post.creator.username}
-                width={28}
-                height={28}
-              />
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={post.creator.avatar_url} alt="" className="w-full h-full object-cover" />
             )}
           </div>
-          <div className="flex-1 min-w-0">
-            <span className="text-sm font-medium text-text truncate block">
+          <span className="text-xs text-muted">
+            <Link href={'/creator/' + post.creator?.username} className="text-text-main font-medium hover:text-primary transition-colors" onClick={e => e.stopPropagation()}>
               {post.creator?.display_name || post.creator?.username}
-            </span>
-            <span className="text-xs text-muted">
-              {post.product?.name}
-            </span>
-          </div>
-          <span className="text-xs text-muted flex-shrink-0">
-            {category?.label}
+            </Link>
+            {post.product && (
+              <span> · <Link href={'/product/' + post.product.id} className="text-primary hover:text-secondary transition-colors" onClick={e => e.stopPropagation()}>{post.product.name}</Link></span>
+            )}
           </span>
         </div>
 
-        {/* Title */}
-        <h3 className="text-base font-semibold text-text leading-snug mb-3">
-          {post.title}
-        </h3>
+        <Link href={'/post/' + post.id}>
+          <h3 className="text-text-main font-semibold text-sm leading-snug mb-3 line-clamp-2 hover:text-primary transition-colors">
+            {post.title}
+          </h3>
+        </Link>
 
-        {/* Tags */}
         <div className="flex flex-wrap gap-1.5 mb-3">
-          {post.product_types?.map(pt => {
-            const type = PRODUCT_TYPES.find(p => p.id === pt)
-            return type ? (
-              <span key={pt} className="text-xs px-2 py-0.5 bg-[#1E1E2E] text-primary/80 border border-primary/20 rounded-full">
-                {type.label}
-              </span>
-            ) : null
-          })}
-          {post.tags?.map(tag => (
-            <span key={tag} className="text-xs px-2 py-0.5 bg-border text-muted rounded-full">
+          {category && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary/90 border border-primary/15 font-medium">
+              {category.label}
+            </span>
+          )}
+          {(post.tags ?? []).slice(0, 2).map(tag => (
+            <span key={tag} className="text-xs px-2 py-0.5 rounded-full bg-white/4 text-muted border border-border">
               #{tag}
             </span>
           ))}
         </div>
 
-        {/* Stats */}
-        <div className="flex items-center gap-4 text-xs text-muted pt-2 border-t border-border">
-          <span>👁 {post.view_count.toLocaleString()}</span>
-          <span>🔗 {post.link_clicks}</span>
-          {post.sandbox_opens > 0 && <span>🧪 {post.sandbox_opens}</span>}
+        <div className="flex items-center gap-3 text-xs text-muted">
+          <span className="flex items-center gap-1"><Eye size={11} /> {fmt(post.view_count ?? 0)}</span>
+          <span className="flex items-center gap-1"><Zap size={11} /> {post.sandbox_opens ?? 0}</span>
+          <span className="flex items-center gap-1"><ExternalLink size={11} /> {post.link_clicks ?? 0}</span>
+
         </div>
       </div>
     </article>

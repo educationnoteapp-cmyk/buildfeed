@@ -75,6 +75,7 @@ export default function EditPostPage({ params }: { params: { id: string } }) {
       code_content: null,
       code_language: null,
       hotspot_url: null,
+      slide_duration_seconds: 3,
       created_at: new Date().toISOString(),
     }))
 
