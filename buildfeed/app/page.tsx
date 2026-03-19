@@ -36,7 +36,7 @@ export default function HomePage() {
       const { data: { session } } = await supabase.auth.getSession()
       setIsLoggedIn(!!session)
       try {
-        const res = await fetch('https://jmlasthxrnjecedsacme.supabase.co/functions/v1/feed?
+    const res = await fetch('/api/feed?sort=smart&limit=24')
         const data = await res.json()
         if (Array.isArray(data) && data.length > 0) setPosts(data)
       } catch {
