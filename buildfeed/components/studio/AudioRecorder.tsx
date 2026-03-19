@@ -180,18 +180,55 @@ export default function AudioRecorder({
     return `${m}:${sec.toString().padStart(2, '0')}`
   }
 
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setError(null)
+    setState('uploading')
+    try {
+      // Get duration from audio element
+      const url = URL.createObjectURL(file)
+      const audio = new Audio(url)
+      const dur = await new Promise<number>((resolve) => {
+        audio.onloadedmetadata = () => resolve(audio.duration)
+        audio.onerror = () => resolve(0)
+      })
+      blobRef.current = file
+      setAudioUrl(url)
+      setDuration(Math.round(dur * 10) / 10)
+      // Upload directly
+      const result = await uploadAudio(file, postId, slideId, dur)
+      setSavedUrl(result.url)
+      setAudioUrl(result.url)
+      setState('done')
+      onSaved(result.url, result.duration_seconds)
+    } catch {
+      setError('שגיאה בהעלאה. נסה שוב.')
+      setState('idle')
+    }
+  }, [postId, slideId, onSaved])
+
   // ── IDLE ──────────────────────────────────────────────────
   if (state === 'idle') {
     return (
-      <button
-        onClick={startRecording}
-        className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 border-dashed border-border hover:border-primary/50 hover:bg-primary/5 transition-all text-muted hover:text-primary group"
-      >
-        <div className="w-8 h-8 rounded-full bg-primary/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
-          <Mic size={14} className="text-primary" />
-        </div>
-        <span className="text-sm font-medium">הקלט אודיו לשקף</span>
-      </button>
+      <div className="flex gap-2">
+        <button
+          onClick={startRecording}
+          className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 border-dashed border-border hover:border-primary/50 hover:bg-primary/5 transition-all text-muted hover:text-primary group"
+        >
+          <div className="w-7 h-7 rounded-full bg-primary/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
+            <Mic size={13} className="text-primary" />
+          </div>
+          <span className="text-sm font-medium">הקלט</span>
+        </button>
+        <label className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 border-dashed border-border hover:border-primary/50 hover:bg-primary/5 transition-all text-muted hover:text-primary group cursor-pointer">
+          <div className="w-7 h-7 rounded-full bg-primary/10 group-hover:bg-primary/20 flex items-center justify-center transition-colors">
+            <Upload size={13} className="text-primary" />
+          </div>
+          <span className="text-sm font-medium">העלה קובץ</span>
+          <input type="file" accept="audio/*" className="hidden" onChange={handleFileUpload} />
+        </label>
+      </div>
     )
   }
 

@@ -44,8 +44,17 @@ export default function SlidePlayer({
   const touchStartX = useRef(0)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const slide = slides[Math.min(current, slides.length - 1)]
-if (!slide) return null
+  const safeIndex = Math.min(current, Math.max(0, slides.length - 1))
+  const slide = slides[safeIndex]
+
+  // Guard — no slides
+  if (!slides || slides.length === 0 || !slide) return (
+    <div className="relative w-full bg-background rounded-xl overflow-hidden" style={{ aspectRatio: '16/9' }}>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <p className="text-muted text-sm">אין שקפים</p>
+      </div>
+    </div>
+  )
 
   // Landscape detection
   useEffect(() => {
