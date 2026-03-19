@@ -12,6 +12,7 @@ interface SlideViewProps {
 
 export default function SlideView({ slide, isActive }: SlideViewProps) {
   const [copied, setCopied] = useState(false)
+  if (!slide) return <div className="w-full h-full bg-surface" />
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation()
