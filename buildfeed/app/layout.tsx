@@ -1,20 +1,15 @@
 import type { Metadata } from 'next'
 import './globals.css'
-
-export const metadata: Metadata = {
-  title: 'BuildFeed — Discovery for Builders',
-  description: 'The Discovery Layer for B2B DevTools. Smart Audio-Slides demos by developers, for developers.',
-}
-
 import BottomNav from '@/components/ui/BottomNav'
 import HeaderNav from '@/components/ui/HeaderNav'
 import Logo from '@/components/ui/Logo'
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export const metadata: Metadata = {
+  title: 'BuildFeed — Discovery for Builders',
+  description: 'The Discovery Layer for B2B DevTools.',
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body>
