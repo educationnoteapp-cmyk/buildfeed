@@ -12,8 +12,8 @@ import Logo from '@/components/ui/Logo'
 type SortOption = 'new' | 'popular' | 'trending'
 
 const SORT_OPTIONS: { id: SortOption; label: string; icon: React.ElementType }[] = [
-  { id: 'new', label: 'חדש', icon: Clock },
-  { id: 'popular', label: 'פופולרי', icon: TrendingUp },
+  { id: 'new', label: '×××©', icon: Clock },
+  { id: 'popular', label: '×¤××¤×××¨×', icon: TrendingUp },
   { id: 'trending', label: 'Trending', icon: Flame },
 ]
 
@@ -103,7 +103,7 @@ export default function HomePage() {
               <input
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="חפש כלים, יוצרים, מוצרים..."
+                placeholder="××¤×© ××××, ×××¦×¨××, ×××¦×¨××..."
                 className="w-full bg-surface border border-border rounded-xl pl-9 pr-8 py-2 text-sm text-text-main placeholder-muted focus:outline-none focus:border-primary/50 transition-colors"
               />
               {search && (
@@ -125,7 +125,7 @@ export default function HomePage() {
 
               {/* Desktop format toggle */}
               <div className="hidden sm:flex items-center gap-1 bg-surface border border-border rounded-xl p-1">
-                {[{id:null,label:'All'},{id:'snap',label:'⚡ Snap'},{id:'demo',label:'📺 Demo'}].map(opt => (
+                {[{id:null,label:'All'},{id:'snap',label:'â¡ Snap'},{id:'demo',label:'ðº Demo'}].map(opt => (
                   <button key={String(opt.id)} onClick={() => setSelectedFormat(opt.id as string | null)}
                     className={'text-xs px-2.5 py-1 rounded-lg transition-colors ' + (selectedFormat === opt.id ? 'bg-primary text-white' : 'text-muted hover:text-text-main')}>
                     {opt.label}
@@ -134,8 +134,8 @@ export default function HomePage() {
               </div>
 
               {isLoggedIn
-                ? <Link href="/studio" className="hidden sm:flex text-sm font-medium bg-primary hover:bg-primary/90 text-white px-3 py-1.5 rounded-xl transition-colors">Studio →</Link>
-                : <Link href="/login" className="hidden sm:flex text-sm font-medium text-primary hover:text-secondary transition-colors">Sign in →</Link>
+                ? <Link href="/studio" className="hidden sm:flex text-sm font-medium bg-primary hover:bg-primary/90 text-white px-3 py-1.5 rounded-xl transition-colors">Studio â</Link>
+                : <Link href="/login" className="hidden sm:flex text-sm font-medium text-primary hover:text-secondary transition-colors">Sign in â</Link>
               }
             </div>
           </div>
@@ -144,7 +144,7 @@ export default function HomePage() {
           {showFilters && (
             <div className="sm:hidden mt-3 pt-3 border-t border-border/50 space-y-3">
               <div className="flex gap-1">
-                {[{id:null,label:'All'},{id:'snap',label:'⚡ Snap'},{id:'demo',label:'📺 Demo'}].map(opt => (
+                {[{id:null,label:'All'},{id:'snap',label:'â¡ Snap'},{id:'demo',label:'ðº Demo'}].map(opt => (
                   <button key={String(opt.id)} onClick={() => setSelectedFormat(opt.id as string | null)}
                     className={'text-xs px-3 py-1.5 rounded-xl border transition-colors ' + (selectedFormat === opt.id ? 'bg-primary border-primary text-white' : 'border-border text-muted')}>
                     {opt.label}
@@ -152,8 +152,8 @@ export default function HomePage() {
                 ))}
               </div>
               {isLoggedIn
-                ? <Link href="/studio" className="block text-center text-sm font-medium bg-primary text-white px-3 py-2 rounded-xl">Studio →</Link>
-                : <Link href="/login" className="block text-center text-sm font-medium text-primary">Sign in →</Link>
+                ? <Link href="/studio" className="block text-center text-sm font-medium bg-primary text-white px-3 py-2 rounded-xl">Studio â</Link>
+                : <Link href="/login" className="block text-center text-sm font-medium text-primary">Sign in â</Link>
               }
             </div>
           )}
@@ -174,7 +174,7 @@ export default function HomePage() {
             </span>
           </h1>
           <p className="text-muted text-sm max-w-sm mx-auto">
-            Smart Audio-Slides — understand any dev tool in minutes.
+            Smart Audio-Slides â understand any dev tool in minutes.
           </p>
         </div>
 
@@ -209,13 +209,13 @@ export default function HomePage() {
         {/* Results bar */}
         <div className="mb-4 flex items-center justify-between">
           <span className="text-xs text-muted">
-            {loading ? 'טוען...' : filtered.length + ' פוסטים'}
-            {selectedCategory && ' · ' + CATEGORIES.find(c => c.id === selectedCategory)?.label}
-            {search && ' · "' + search + '"'}
+            {loading ? '×××¢×...' : filtered.length + ' ×¤××¡×××'}
+            {selectedCategory && ' Â· ' + CATEGORIES.find(c => c.id === selectedCategory)?.label}
+            {search && ' Â· "' + search + '"'}
           </span>
           {activeFilters > 0 && (
             <button onClick={clearAll} className="text-xs text-muted hover:text-text-main flex items-center gap-1">
-              <X size={10} /> נקה הכל
+              <X size={10} /> × ×§× ×××
             </button>
           )}
         </div>
@@ -238,12 +238,12 @@ export default function HomePage() {
             <div className="w-16 h-16 rounded-2xl bg-surface border border-border flex items-center justify-center mx-auto mb-4">
               <Search size={22} className="text-muted" />
             </div>
-            <p className="text-text-main font-medium mb-1">לא נמצאו תוצאות</p>
+            <p className="text-text-main font-medium mb-1">×× × ××¦×× ×ª××¦×××ª</p>
             <p className="text-muted text-sm mb-4">
-              {search ? `אין פוסטים עבור "${search}"` : 'נסה פילטר אחר'}
+              {search ? `××× ×¤××¡××× ×¢×××¨ "${search}"` : '× ×¡× ×¤××××¨ ×××¨'}
             </p>
             <button onClick={clearAll} className="text-sm text-primary hover:text-secondary transition-colors">
-              נקה את כל הפילטרים
+              × ×§× ××ª ×× ××¤××××¨××
             </button>
           </div>
         ) : (
@@ -259,7 +259,7 @@ export default function HomePage() {
                   onClick={() => setPage(p => p + 1)}
                   className="text-sm font-medium border border-border hover:border-white/20 text-muted hover:text-text-main px-6 py-2.5 rounded-xl transition-colors"
                 >
-                  טען עוד ({filtered.length - paginated.length} נוספים)
+                  ××¢× ×¢×× ({filtered.length - paginated.length} × ××¡×¤××)
                 </button>
               </div>
             )}
