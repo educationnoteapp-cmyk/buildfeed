@@ -7,7 +7,7 @@ export async function uploadImage(
 ): Promise<{ url: string; key: string }> {
   const supabase = createClient()
   const ext = file.type === 'image/gif' ? 'gif' : 'webp'
-  const key = postId + '/' + slideId + '/image.' + ext
+  const key = `${postId}/${slideId}/image.${ext}`
 
   const { error } = await supabase.storage
     .from('slides-images')
@@ -29,9 +29,8 @@ export async function uploadAudio(
   const ext = blob.type.includes('webm') ? 'webm'
     : blob.type.includes('wav') ? 'wav'
     : blob.type.includes('ogg') ? 'ogg'
-    : blob.type.includes('mp4') ? 'mp4'
-    : 'webm'
-  const key = postId + '/' + slideId + '/audio.' + ext
+    : 'mp3'
+  const key = `${postId}/${slideId}/audio.${ext}`
 
   const { error } = await supabase.storage
     .from('slides-audio')
