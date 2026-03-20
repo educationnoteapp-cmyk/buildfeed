@@ -38,7 +38,15 @@ export default function HomePage() {
       try {
         const res = await fetch('/api/feed?sort=smart&limit=24')
         const data = await res.json()
-        if (Array.isArray(data) && data.length > 0) setPosts(data)
+        if (Array.isArray(data) && data.length > 0) {
+          const mapped = data.map((p: any) => ({
+            ...p,
+            creator: p.creator ?? { id: p.creator_id, username: p.creator_username, display_name: p.creator_display_name, avatar_url: p.creator_avatar_url },
+            product: p.product ?? (p.product_id ? { id: p.product_id, name: p.product_name, logo_url: p.product_logo_url, website_url: p.product_website_url } : null),
+            slides: p.slides ?? [],
+          }))
+          setPosts(mapped)
+        }
       } catch {
         // fallback to seed posts
       }
