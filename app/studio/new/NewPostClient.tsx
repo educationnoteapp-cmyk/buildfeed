@@ -55,58 +55,44 @@ export default function NewPostClient({ userId }: { userId: string }) {
   const format = slides.length <= 8 ? 'snap' : 'demo'
 
   const ensurePostExists = useCallback(async () => {
-    // בדוק מגבלת יוצרים (רק בפרסום ראשון)
-    if (!postCreatedRef.current) {
-      try {
-        const { data: canCreate } = await supabase.rpc('can_become_creator')
-        if (canCreate && !canCreate.allowed) {
-          router.push('/studio/waitlist')
-          return false
-        }
-      } catch (e) {
-        console.warn('can_become_creator check failed, continuing:', e)
-      }
-    }
+    if (postCreatedRef.current) return true
 
-    // Create product if needed and not yet created
-    if (productName && !productIdRef.current) {
-      const { data: prod, error: prodErr } = await supabase
-        .from('products')
-        .insert({
-          creator_id: userId,
-          name: productName,
-          tagline: productTagline || null,
-          website_url: productUrl || null,
-        })
-        .select('id')
-        .single()
-      if (prodErr) { console.error('Product error:', prodErr); }
-      else { productIdRef.current = prod?.id ?? null }
-    }
-
-    if (!postCreatedRef.current) {
-      const { error } = await supabase.from('posts').upsert({
-        id: postId,
-        creator_id: userId,
-        product_id: productIdRef.current,
-        title: title || 'טיוטה ללא כותרת',
-        format,
-        category: category || 'devtools',
-        product_types: productTypes,
-        tags: selectedTags,
-        status: 'draft',
-        slide_count: slides.length,
+    try {
+      const res = await fetch('/api/post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          postId,
+          title: title || 'טיוטה ללא כותרת',
+          format,
+          category: category || 'devtools',
+          productTypes,
+          tags: selectedTags,
+          slideCount: slides.length,
+          productName: productName || null,
+          productTagline: productTagline || null,
+          productUrl: productUrl || null,
+        }),
       })
-      if (error) { console.error('Post error:', error); return false }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        if (res.status === 401) { router.push('/login'); return false }
+        console.error('Create post failed:', err)
+        return false
+      }
+
+      const data = await res.json()
+      if (data.productId) productIdRef.current = data.productId
       postCreatedRef.current = true
+      return true
+    } catch (e) {
+      console.error('ensurePostExists error:', e)
+      return false
     }
-    return true
-  }, [postId, supabase, router, title, format, category, productTypes, selectedTags, slides.length, productName, productTagline, productUrl])
+  }, [postId, router, title, format, category, productTypes, selectedTags, slides.length, productName, productTagline, productUrl])
 
   const handleSlidesCreated = useCallback(async (uploaded: { tempId: string; imageUrl: string; position: number }[]) => {
-    const ok = await ensurePostExists()
-    if (!ok) return
-
     const newSlides: LocalSlide[] = uploaded.map(u => ({
       id: u.tempId,
       post_id: postId,
@@ -124,24 +110,50 @@ export default function NewPostClient({ userId }: { userId: string }) {
       created_at: new Date().toISOString(),
     }))
 
-    setSlides(prev => [...prev, ...newSlides])
+    setSlides(prev => {
+      const all = [...prev, ...newSlides]
 
-    for (const slide of newSlides) {
-      const { error: slideErr } = await supabase.from('slides').upsert({
-        id: slide.id,
-        post_id: postId,
-        position: slide.position,
-        slide_type: 'media',
-        image_url: slide.image_url,
-        slide_duration_seconds: 3,
+      // Save post + slides via server API
+      fetch('/api/post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          postId,
+          title: title || 'טיוטה ללא כותרת',
+          format,
+          category: category || 'devtools',
+          productTypes,
+          tags: selectedTags,
+          slideCount: all.length,
+          productName: productName || null,
+          productTagline: productTagline || null,
+          productUrl: productUrl || null,
+          slides: all.map(s => ({
+            id: s.id,
+            position: s.position,
+            slide_type: s.slide_type,
+            image_url: s.image_url,
+            audio_url: s.audio_url,
+            audio_duration_seconds: s.audio_duration_seconds,
+            slide_duration_seconds: s.slide_duration_seconds,
+            code_content: s.code_content,
+            code_language: s.code_language,
+            hotspot_url: s.hotspot_url,
+          })),
+        }),
+      }).then(res => {
+        if (res.ok) {
+          postCreatedRef.current = true
+          setAutoSaved(true)
+          setTimeout(() => setAutoSaved(false), 2000)
+        } else {
+          res.json().then(err => console.error('Save failed:', err))
+        }
       })
-      if (slideErr) console.error('Slide error:', slideErr)
-    }
 
-    await supabase.from('posts').update({ slide_count: slides.length + newSlides.length }).eq('id', postId)
-    setAutoSaved(true)
-    setTimeout(() => setAutoSaved(false), 2000)
-  }, [ensurePostExists, postId, supabase, slides.length])
+      return all
+    })
+  }, [postId, title, format, category, productTypes, selectedTags, productName, productTagline, productUrl])
 
   const handleSlideUpdate = useCallback(async (id: string, updates: Partial<Slide>) => {
     setSlides(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s))
@@ -161,43 +173,67 @@ export default function NewPostClient({ userId }: { userId: string }) {
   // Auto-save when metadata changes
   useEffect(() => {
     if (!postCreatedRef.current) return
-    const timer = setTimeout(async () => {
-      const { error } = await supabase.from('posts').update({
-        title: title || 'טיוטה ללא כותרת',
-        category: category || 'devtools',
-        product_types: productTypes,
-        tags: selectedTags,
-        format,
-        slide_count: slides.length,
-      }).eq('id', postId)
-      if (!error) {
-        setAutoSaved(true)
-        setTimeout(() => setAutoSaved(false), 2000)
-      }
+    const timer = setTimeout(() => {
+      fetch('/api/post', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          postId,
+          title: title || 'טיוטה ללא כותרת',
+          category: category || 'devtools',
+          product_types: productTypes,
+          tags: selectedTags,
+          format,
+          slide_count: slides.length,
+        }),
+      }).then(res => {
+        if (res.ok) {
+          setAutoSaved(true)
+          setTimeout(() => setAutoSaved(false), 2000)
+        }
+      })
     }, 800)
     return () => clearTimeout(timer)
-  }, [title, category, productTypes, selectedTags, supabase, postId, format, slides.length])
+  }, [title, category, productTypes, selectedTags, postId, format, slides.length])
 
   const handleSaveDraft = async () => {
     setSaving(true)
     setSaveError(null)
-    const ok = await ensurePostExists()
-    if (!ok) { setSaving(false); return }
 
-    const { error } = await supabase.from('posts').update({
-      title: title || 'טיוטה ללא כותרת',
-      category: category || 'devtools',
-      product_types: productTypes,
-      tags: selectedTags,
-      format,
-      version_tags: versionTags,
-      github_url: githubUrl || null,
-      status: 'draft',
-      slide_count: slides.length,
-    }).eq('id', postId)
+    const res = await fetch('/api/post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        postId,
+        title: title || 'טיוטה ללא כותרת',
+        format,
+        category: category || 'devtools',
+        productTypes,
+        tags: selectedTags,
+        slideCount: slides.length,
+        slides: slides.map(s => ({
+          id: s.id, position: s.position, slide_type: s.slide_type,
+          image_url: s.image_url, audio_url: s.audio_url,
+          audio_duration_seconds: s.audio_duration_seconds,
+          slide_duration_seconds: s.slide_duration_seconds,
+          code_content: s.code_content, code_language: s.code_language,
+          hotspot_url: s.hotspot_url,
+        })),
+        productName: productName || null,
+        productTagline: productTagline || null,
+        productUrl: productUrl || null,
+        versionTags,
+        githubUrl: githubUrl || null,
+      }),
+    })
 
     setSaving(false)
-    if (error) { setSaveError('שגיאה בשמירה: ' + error.message); return }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      setSaveError('שגיאה בשמירה: ' + (err.error || 'Unknown'))
+      return
+    }
+    postCreatedRef.current = true
     router.push('/studio')
   }
 
@@ -205,22 +241,59 @@ export default function NewPostClient({ userId }: { userId: string }) {
     if (!title || !category || slides.length < 3) return
     setPublishing(true)
     setSaveError(null)
-    const ok = await ensurePostExists()
-    if (!ok) { setPublishing(false); return }
 
-    const { error } = await supabase.from('posts').update({
-      title,
-      category,
-      product_types: productTypes,
-      tags: selectedTags,
-      format,
-      status: 'published',
-      published_at: new Date().toISOString(),
-      slide_count: slides.length,
-    }).eq('id', postId)
+    // First ensure post + slides exist
+    const saveRes = await fetch('/api/post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        postId,
+        title,
+        format,
+        category,
+        productTypes,
+        tags: selectedTags,
+        slideCount: slides.length,
+        slides: slides.map(s => ({
+          id: s.id, position: s.position, slide_type: s.slide_type,
+          image_url: s.image_url, audio_url: s.audio_url,
+          audio_duration_seconds: s.audio_duration_seconds,
+          slide_duration_seconds: s.slide_duration_seconds,
+          code_content: s.code_content, code_language: s.code_language,
+          hotspot_url: s.hotspot_url,
+        })),
+        productName: productName || null,
+        productTagline: productTagline || null,
+        productUrl: productUrl || null,
+        versionTags,
+        githubUrl: githubUrl || null,
+      }),
+    })
+    if (!saveRes.ok) { setPublishing(false); setSaveError('שגיאה בשמירה'); return }
+
+    // Then publish
+    const pubRes = await fetch('/api/post', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        postId,
+        status: 'published',
+        published_at: new Date().toISOString(),
+        title,
+        category,
+        product_types: productTypes,
+        tags: selectedTags,
+        format,
+        slide_count: slides.length,
+      }),
+    })
 
     setPublishing(false)
-    if (error) { setSaveError('שגיאה בפרסום: ' + error.message); return }
+    if (!pubRes.ok) {
+      const err = await pubRes.json().catch(() => ({}))
+      setSaveError('שגיאה בפרסום: ' + (err.error || 'Unknown'))
+      return
+    }
     router.push('/')
   }
 
