@@ -51,22 +51,36 @@ export default function NewPostPage() {
 
   const postCreatedRef = useRef(false)
   const productIdRef = useRef<string | null>(null)
+  const userIdRef = useRef<string | null>(null)
+
+  // Load user ID once on mount — avoids getSession lock issues
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        userIdRef.current = user.id
+        console.log('User loaded:', user.id)
+      } else {
+        router.push('/login')
+      }
+    })
+  }, [supabase, router])
 
   const format = slides.length <= 8 ? 'snap' : 'demo'
 
   const ensurePostExists = useCallback(async () => {
-    console.log('=== ensurePostExists START ===')
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-    console.log('Session:', session ? 'YES (uid: ' + session.user.id + ')' : 'NO', sessionError)
-    if (!session) { router.push('/login'); return false }
+    const userId = userIdRef.current
+    if (!userId) { router.push('/login'); return false }
 
     // בדוק מגבלת יוצרים (רק בפרסום ראשון)
     if (!postCreatedRef.current) {
-      const { data: canCreate, error: rpcErr } = await supabase.rpc('can_become_creator')
-      console.log('can_become_creator:', canCreate, 'error:', rpcErr)
-      if (canCreate && !canCreate.allowed) {
-        router.push('/studio/waitlist')
-        return false
+      try {
+        const { data: canCreate } = await supabase.rpc('can_become_creator')
+        if (canCreate && !canCreate.allowed) {
+          router.push('/studio/waitlist')
+          return false
+        }
+      } catch (e) {
+        console.warn('can_become_creator check failed, continuing:', e)
       }
     }
 
@@ -75,23 +89,21 @@ export default function NewPostPage() {
       const { data: prod, error: prodErr } = await supabase
         .from('products')
         .insert({
-          creator_id: session.user.id,
+          creator_id: userId,
           name: productName,
           tagline: productTagline || null,
           website_url: productUrl || null,
         })
         .select('id')
         .single()
-      console.log('Product create:', prod, prodErr)
       if (prodErr) { console.error('Product error:', prodErr); }
       else { productIdRef.current = prod?.id ?? null }
     }
 
     if (!postCreatedRef.current) {
-      console.log('Creating post with id:', postId)
       const { error } = await supabase.from('posts').upsert({
         id: postId,
-        creator_id: session.user.id,
+        creator_id: userId,
         product_id: productIdRef.current,
         title: title || 'טיוטה ללא כותרת',
         format,
@@ -101,18 +113,14 @@ export default function NewPostPage() {
         status: 'draft',
         slide_count: slides.length,
       })
-      console.log('Post upsert error:', error)
       if (error) { console.error('Post error:', error); return false }
       postCreatedRef.current = true
     }
-    console.log('=== ensurePostExists OK ===')
     return true
   }, [postId, supabase, router, title, format, category, productTypes, selectedTags, slides.length, productName, productTagline, productUrl])
 
   const handleSlidesCreated = useCallback(async (uploaded: { tempId: string; imageUrl: string; position: number }[]) => {
-    console.log('=== handleSlidesCreated START ===', uploaded.length, 'slides')
     const ok = await ensurePostExists()
-    console.log('ensurePostExists result:', ok)
     if (!ok) return
 
     const newSlides: LocalSlide[] = uploaded.map(u => ({
@@ -135,7 +143,6 @@ export default function NewPostPage() {
     setSlides(prev => [...prev, ...newSlides])
 
     for (const slide of newSlides) {
-      console.log('Upserting slide:', slide.id, 'post:', postId)
       const { error: slideErr } = await supabase.from('slides').upsert({
         id: slide.id,
         post_id: postId,
@@ -144,12 +151,10 @@ export default function NewPostPage() {
         image_url: slide.image_url,
         slide_duration_seconds: 3,
       })
-      console.log('Slide upsert error:', slideErr)
+      if (slideErr) console.error('Slide error:', slideErr)
     }
 
-    const { error: updateErr } = await supabase.from('posts').update({ slide_count: slides.length + newSlides.length }).eq('id', postId)
-    console.log('Post slide_count update error:', updateErr)
-    console.log('=== handleSlidesCreated DONE ===')
+    await supabase.from('posts').update({ slide_count: slides.length + newSlides.length }).eq('id', postId)
     setAutoSaved(true)
     setTimeout(() => setAutoSaved(false), 2000)
   }, [ensurePostExists, postId, supabase, slides.length])
