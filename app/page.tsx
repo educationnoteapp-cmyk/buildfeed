@@ -1,5 +1,5 @@
 'use client'
-
+ 
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { Search, X, TrendingUp, Clock, Flame, SlidersHorizontal } from 'lucide-react'
@@ -41,11 +41,16 @@ export default function HomePage() {
           p_limit: 24,
           p_offset: 0,
         })
-        if (!error && Array.isArray(data) && data.length > 0) {
-          setPosts(data)
+        console.log('Feed RPC response:', { data, error })
+        if (error) { console.error('Feed RPC error:', error); throw error }
+        // RPC might return array directly, or wrapped in an object
+        const feedArray = Array.isArray(data) ? data : (data?.result ?? data?.data ?? [])
+        if (Array.isArray(feedArray) && feedArray.length > 0) {
+          setPosts(feedArray)
         }
-      } catch {
-        // fallback to seed posts
+      } catch (e) {
+        console.error('Feed load failed, using seed:', e)
+        // fallback to seed posts (already set as default)
       }
       setLoading(false)
     }
