@@ -1,6 +1,5 @@
-import type { NextConfig } from 'next'
-
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: '*.r2.dev' },
@@ -9,16 +8,11 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: 'lh3.googleusercontent.com' },
       { protocol: 'https', hostname: '*.supabase.co' },
       { protocol: 'https', hostname: '*.unsplash.com' },
+      { protocol: 'https', hostname: 'api.dicebear.com' },
+      { protocol: 'https', hostname: 'images.unsplash.com' },
     ],
   },
-  async rewrites() {
-    return [
-      {
-        source: '/api/feed',
-        destination: 'https://jmlasthxrnjecedsacme.supabase.co/functions/v1/feed',
-      },
-    ]
-  },
 }
-
-export default nextConfig
+ 
+module.exports = nextConfig
+ 
