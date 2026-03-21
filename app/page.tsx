@@ -8,17 +8,17 @@ import { Post, CATEGORIES } from '@/lib/types'
 import { SEED_POSTS } from '@/lib/seed'
 import PostCard from '@/components/feed/PostCard'
 import Logo from '@/components/ui/Logo'
-
+ 
 type SortOption = 'new' | 'popular' | 'trending'
-
+ 
 const SORT_OPTIONS: { id: SortOption; label: string; icon: React.ElementType }[] = [
   { id: 'new', label: 'חדש', icon: Clock },
   { id: 'popular', label: 'פופולרי', icon: TrendingUp },
   { id: 'trending', label: 'Trending', icon: Flame },
 ]
-
+ 
 const PAGE_SIZE = 9
-
+ 
 export default function HomePage() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [selectedFormat, setSelectedFormat] = useState<string | null>(null)
@@ -29,23 +29,20 @@ export default function HomePage() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [page, setPage] = useState(1)
   const [showFilters, setShowFilters] = useState(false)
-
+ 
   useEffect(() => {
     const supabase = createClient()
     const load = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       setIsLoggedIn(!!session)
       try {
-        const res = await fetch('https://jmlasthxrnjecedsacme.supabase.co/functions/v1/feed?sort=smart&limit=24')
-        const data = await res.json()
-        if (Array.isArray(data) && data.length > 0) {
-          const mapped = data.map((p: any) => ({
-            ...p,
-            creator: p.creator ?? { id: p.creator_id, username: p.creator_username, display_name: p.creator_display_name, avatar_url: p.creator_avatar_url },
-            product: p.product ?? (p.product_id ? { id: p.product_id, name: p.product_name, logo_url: p.product_logo_url, website_url: p.product_website_url } : null),
-            slides: p.slides ?? [],
-          }))
-          setPosts(mapped)
+        const { data, error } = await supabase.rpc('get_feed_json', {
+          p_sort: 'smart',
+          p_limit: 24,
+          p_offset: 0,
+        })
+        if (!error && Array.isArray(data) && data.length > 0) {
+          setPosts(data)
         }
       } catch {
         // fallback to seed posts
@@ -54,10 +51,10 @@ export default function HomePage() {
     }
     load()
   }, [])
-
+ 
   // Reset page when filters change
   useEffect(() => { setPage(1) }, [selectedCategory, selectedFormat, sortBy, search])
-
+ 
   const filtered = useMemo(() => {
     let result = posts.filter(p =>
       (!selectedCategory || p.category === selectedCategory) &&
@@ -65,7 +62,7 @@ export default function HomePage() {
       (!search || [p.title, p.creator?.display_name, p.creator?.username, p.product?.name]
         .some(s => s?.toLowerCase().includes(search.toLowerCase())))
     )
-
+ 
     switch (sortBy) {
       case 'popular':
         result = [...result].sort((a, b) => (b.view_count ?? 0) - (a.view_count ?? 0))
@@ -80,19 +77,19 @@ export default function HomePage() {
     }
     return result
   }, [posts, selectedCategory, selectedFormat, sortBy, search])
-
+ 
   const paginated = filtered.slice(0, page * PAGE_SIZE)
   const hasMore = paginated.length < filtered.length
-
+ 
   const clearAll = useCallback(() => {
     setSelectedCategory(null)
     setSelectedFormat(null)
     setSearch('')
     setSortBy('new')
   }, [])
-
+ 
   const activeFilters = [selectedCategory, selectedFormat, search].filter(Boolean).length
-
+ 
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -104,7 +101,7 @@ export default function HomePage() {
               <Logo size={26} />
               <span className="font-bold text-text-main text-base tracking-tight hidden sm:block">BuildFeed</span>
             </Link>
-
+ 
             {/* Search */}
             <div className="flex-1 relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
@@ -120,7 +117,7 @@ export default function HomePage() {
                 </button>
               )}
             </div>
-
+ 
             {/* Filter toggle (mobile) + Desktop controls */}
             <div className="flex items-center gap-2 flex-shrink-0">
               <button
@@ -130,7 +127,7 @@ export default function HomePage() {
                 <SlidersHorizontal size={13} />
                 {activeFilters > 0 && <span className="w-4 h-4 bg-primary rounded-full text-white text-[10px] flex items-center justify-center">{activeFilters}</span>}
               </button>
-
+ 
               {/* Desktop format toggle */}
               <div className="hidden sm:flex items-center gap-1 bg-surface border border-border rounded-xl p-1">
                 {[{id:null,label:'All'},{id:'snap',label:'⚡ Snap'},{id:'demo',label:'📺 Demo'}].map(opt => (
@@ -140,14 +137,14 @@ export default function HomePage() {
                   </button>
                 ))}
               </div>
-
+ 
               {isLoggedIn
                 ? <Link href="/studio" className="hidden sm:flex text-sm font-medium bg-primary hover:bg-primary/90 text-white px-3 py-1.5 rounded-xl transition-colors">Studio →</Link>
                 : <Link href="/login" className="hidden sm:flex text-sm font-medium text-primary hover:text-secondary transition-colors">Sign in →</Link>
               }
             </div>
           </div>
-
+ 
           {/* Mobile filters panel */}
           {showFilters && (
             <div className="sm:hidden mt-3 pt-3 border-t border-border/50 space-y-3">
@@ -167,7 +164,7 @@ export default function HomePage() {
           )}
         </div>
       </header>
-
+ 
       <main className="max-w-6xl mx-auto px-4">
         {/* Hero */}
         <div className="bg-grid py-8 sm:py-12 text-center">
@@ -185,7 +182,7 @@ export default function HomePage() {
             Smart Audio-Slides — understand any dev tool in minutes.
           </p>
         </div>
-
+ 
         {/* Filters row */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 pb-4">
           {/* Category scroll */}
@@ -201,7 +198,7 @@ export default function HomePage() {
               </button>
             ))}
           </div>
-
+ 
           {/* Sort */}
           <div className="flex items-center gap-1 flex-shrink-0">
             {SORT_OPTIONS.map(({ id, label, icon: Icon }) => (
@@ -213,7 +210,7 @@ export default function HomePage() {
             ))}
           </div>
         </div>
-
+ 
         {/* Results bar */}
         <div className="mb-4 flex items-center justify-between">
           <span className="text-xs text-muted">
@@ -227,7 +224,7 @@ export default function HomePage() {
             </button>
           )}
         </div>
-
+ 
         {/* Grid */}
         {loading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-16">
@@ -259,7 +256,7 @@ export default function HomePage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-fade-in">
               {paginated.map(post => <PostCard key={post.id} post={post} />)}
             </div>
-
+ 
             {/* Load more */}
             {hasMore && (
               <div className="text-center mt-8">
@@ -274,7 +271,7 @@ export default function HomePage() {
           </div>
         )}
       </main>
-
+ 
       <footer className="border-t border-border/50 py-8 text-center text-xs text-muted">
         <div className="flex items-center justify-center gap-2 mb-2">
           <Logo size={16} />
@@ -285,3 +282,4 @@ export default function HomePage() {
     </div>
   )
 }
+ 
