@@ -1,9 +1,9 @@
 'use client'
-
+ 
 import { useEffect, useState } from 'react'
 import { Eye, Zap, ExternalLink, Users, TrendingUp } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-
+ 
 interface PostStat {
   id: string
   title: string
@@ -13,7 +13,7 @@ interface PostStat {
   published_at: string
   format: string
 }
-
+ 
 interface CreatorStats {
   total_views: number
   total_tries: number
@@ -21,32 +21,53 @@ interface CreatorStats {
   total_followers: number
   total_posts: number
 }
-
+ 
 export default function AnalyticsDashboard({ creatorId }: { creatorId: string }) {
   const [posts, setPosts] = useState<PostStat[]>([])
   const [stats, setStats] = useState<CreatorStats | null>(null)
   const [loading, setLoading] = useState(true)
   const supabase = createClient()
-
+ 
   useEffect(() => {
     const load = async () => {
-      const [postsRes, statsRes] = await Promise.all([
-        supabase
+      try {
+        // Fetch published posts stats
+        const { data: postsData } = await supabase
           .from('posts')
           .select('id, title, view_count, sandbox_opens, link_clicks, published_at, format')
           .eq('creator_id', creatorId)
           .eq('status', 'published')
-          .order('view_count', { ascending: false }),
-        supabase.rpc('get_creator_stats', { creator_uuid: creatorId })
-      ])
-
-      if (postsRes.data) setPosts(postsRes.data)
-      if (statsRes.data?.[0]) setStats(statsRes.data[0])
+          .order('view_count', { ascending: false })
+ 
+        if (postsData) setPosts(postsData)
+ 
+        // Try RPC for aggregated stats
+        const { data: statsData, error: statsError } = await supabase
+          .rpc('get_creator_stats', { creator_uuid: creatorId })
+ 
+        if (!statsError && statsData) {
+          // RPC might return array or single object
+          const s = Array.isArray(statsData) ? statsData[0] : statsData
+          if (s) setStats(s)
+        } else {
+          // Fallback: calculate from posts
+          const pd = postsData ?? []
+          setStats({
+            total_views: pd.reduce((sum, p) => sum + (p.view_count ?? 0), 0),
+            total_tries: pd.reduce((sum, p) => sum + (p.sandbox_opens ?? 0), 0),
+            total_clicks: pd.reduce((sum, p) => sum + (p.link_clicks ?? 0), 0),
+            total_followers: 0,
+            total_posts: pd.length,
+          })
+        }
+      } catch (e) {
+        console.error('Analytics load error:', e)
+      }
       setLoading(false)
     }
     load()
   }, [creatorId, supabase])
-
+ 
   if (loading) {
     return (
       <div className="animate-pulse space-y-4">
@@ -56,16 +77,16 @@ export default function AnalyticsDashboard({ creatorId }: { creatorId: string })
       </div>
     )
   }
-
+ 
   const statCards = [
     { label: 'צפיות', value: stats?.total_views ?? 0, icon: Eye, color: 'text-blue-400' },
     { label: 'ניסיונות', value: stats?.total_tries ?? 0, icon: Zap, color: 'text-yellow-400' },
     { label: 'קליקים', value: stats?.total_clicks ?? 0, icon: ExternalLink, color: 'text-green-400' },
     { label: 'עוקבים', value: stats?.total_followers ?? 0, icon: Users, color: 'text-purple-400' },
   ]
-
+ 
   const fmt = (n: number) => n >= 1000 ? `${(n/1000).toFixed(1)}k` : n.toString()
-
+ 
   return (
     <div className="space-y-6">
       {/* Summary stats */}
@@ -78,7 +99,7 @@ export default function AnalyticsDashboard({ creatorId }: { creatorId: string })
           </div>
         ))}
       </div>
-
+ 
       {/* Per-post breakdown */}
       {posts.length > 0 && (
         <div className="bg-surface border border-border rounded-xl overflow-hidden">
@@ -111,7 +132,7 @@ export default function AnalyticsDashboard({ creatorId }: { creatorId: string })
           </div>
         </div>
       )}
-
+ 
       {posts.length === 0 && (
         <div className="text-center py-12 text-muted">
           <TrendingUp size={32} className="mx-auto mb-3 opacity-30" />
@@ -121,3 +142,4 @@ export default function AnalyticsDashboard({ creatorId }: { creatorId: string })
     </div>
   )
 }
+ 
