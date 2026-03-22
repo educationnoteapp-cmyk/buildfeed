@@ -9,10 +9,21 @@ interface PostCardProps {
   post: Post
 }
 
+function calcDuration(slides: Post['slides']): string | null {
+  if (!slides || slides.length === 0) return null
+  const total = slides.reduce((sum, s) => {
+    if (s.audio_url && s.audio_duration_seconds) return sum + s.audio_duration_seconds
+    return sum + ((s as any).slide_duration_seconds ?? 3)
+  }, 0)
+  const secs = Math.round(total)
+  return Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0')
+}
+
 export default function PostCard({ post }: PostCardProps) {
   const category = CATEGORIES.find(c => c.id === post.category)
   const firstSlide = post.slides?.[0]
   const thumbUrl = firstSlide?.slide_type !== 'code' ? firstSlide?.image_url : null
+  const duration = calcDuration(post.slides)
 
   const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)
 
@@ -45,10 +56,15 @@ export default function PostCard({ post }: PostCardProps) {
             </span>
           </div>
 
-          {/* Slide count */}
-          <div className="absolute top-3 right-3">
+          {/* Duration + slide count */}
+          <div className="absolute top-3 right-3 flex items-center gap-1.5">
+            {duration && (
+              <span className="text-xs text-white font-mono bg-black/50 backdrop-blur-sm px-2 py-0.5 rounded-full">
+                {duration}
+              </span>
+            )}
             <span className="text-xs text-white/60 bg-black/40 backdrop-blur-sm px-2 py-0.5 rounded-full">
-              {post.slide_count} slides
+              {post.slide_count}
             </span>
           </div>
         </div>
