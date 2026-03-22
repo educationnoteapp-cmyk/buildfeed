@@ -23,8 +23,8 @@ interface SlidePlayerProps {
 }
 
 const MIN_SLIDE_MS = 2000
+const AUDIO_UNLOCKED_KEY = 'bf_audio_unlocked'
 
-// מחוץ לקומפוננטה — לא hook
 function checkIsIOS() {
   if (typeof window === 'undefined') return false
   return /iPad|iPhone|iPod/.test(navigator.userAgent)
@@ -39,11 +39,11 @@ export default function SlidePlayer({
   const [current, setCurrent] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isStarted, setIsStarted] = useState(false)
-  const [isMuted, setIsMuted] = useState(defaultMuted)
+  const [isMuted, setIsMuted] = useState(true) // תמיד מתחיל מיוטד
   const [progress, setProgress] = useState(0)
   const [isLandscape, setIsLandscape] = useState(false)
   const [isEnded, setIsEnded] = useState(false)
-  const [needsIOSTap, setNeedsIOSTap] = useState(false)
+  const [showUnmuteBanner, setShowUnmuteBanner] = useState(false)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const bgAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -108,14 +108,14 @@ export default function SlidePlayer({
     clearTimers(); stopAudio(); setProgress(0); setIsEnded(false); setCurrent(idx)
   }, [safeSlides.length, clearTimers, stopAudio])
 
-  const playSlide = useCallback((s: Slide | undefined) => {
+  const playSlide = useCallback((s: Slide | undefined, muted: boolean) => {
     if (!s) return
     stopAudio()
     clearTimers()
     const hasAudio = s.audio_url && s.audio_url.length > 0
     const duration = hasAudio
       ? (s.audio_duration_seconds ?? 3) * 1000
-      : Math.max((s.slide_duration_seconds ?? 3) * 1000, MIN_SLIDE_MS)
+      : Math.max((s as any).slide_duration_seconds ? (s as any).slide_duration_seconds * 1000 : 3000, MIN_SLIDE_MS)
     const start = Date.now()
 
     progTimer.current = setInterval(() => {
@@ -126,7 +126,7 @@ export default function SlidePlayer({
 
     if (hasAudio) {
       const audio = new Audio(s.audio_url!)
-      audio.muted = isMuted
+      audio.muted = muted
       audio.volume = (s as any).audio_volume ?? 1.0
       audioRef.current = audio
       audio.onended = () => {
@@ -142,26 +142,29 @@ export default function SlidePlayer({
         slideTimer.current = setTimeout(goNext, duration)
       }
     }
-  }, [isMuted, goNext, clearTimers, stopAudio, playerMode])
+  }, [goNext, clearTimers, stopAudio, playerMode])
 
-  // Autoplay on mount
+  // Autoplay on mount — תמיד מיוטד
   useEffect(() => {
     if (!autoPlay || hasAutoPlayed.current) return
-    if (checkIsIOS()) {
-      setNeedsIOSTap(true)
-      return
-    }
     hasAutoPlayed.current = true
+
+    // בדוק אם המשתמש כבר ביטל mute בעבר
+    const wasUnlocked = typeof window !== 'undefined' && localStorage.getItem(AUDIO_UNLOCKED_KEY) === '1'
+    const startMuted = wasUnlocked ? defaultMuted : true
+    setIsMuted(startMuted)
+    setShowUnmuteBanner(!startMuted ? false : !wasUnlocked)
+
     setIsStarted(true)
     setIsPlaying(true)
-    if (safeSlides[0]) playSlide(safeSlides[0])
+    if (safeSlides[0]) playSlide(safeSlides[0], startMuted)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Play when slide changes
   useEffect(() => {
     if (isPlaying && isStarted && safeSlides[current]) {
-      playSlide(safeSlides[current])
+      playSlide(safeSlides[current], isMuted)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, isPlaying])
@@ -176,15 +179,32 @@ export default function SlidePlayer({
   useEffect(() => {
     if (!bgAudioUrl) return
     const bg = new Audio(bgAudioUrl)
-    bg.loop = true; bg.volume = bgAudioVolume
+    bg.loop = true; bg.volume = bgAudioVolume; bg.muted = isMuted
     bgAudioRef.current = bg
+    if (isPlaying) bg.play().catch(() => {})
     return () => { bg.pause(); bg.src = '' }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgAudioUrl, bgAudioVolume])
 
   // Mute sync
   useEffect(() => {
     if (audioRef.current) audioRef.current.muted = isMuted
+    if (bgAudioRef.current) bgAudioRef.current.muted = isMuted
   }, [isMuted])
+
+  const handleUnmute = useCallback(() => {
+    setIsMuted(false)
+    setShowUnmuteBanner(false)
+    // שמור שהמשתמש ביטל mute — בפעם הבאה יתחיל עם קול
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(AUDIO_UNLOCKED_KEY, '1')
+    }
+    // הפעל מחדש את השקף הנוכחי עם קול
+    stopAudio()
+    clearTimers()
+    if (safeSlides[current]) playSlide(safeSlides[current], false)
+    bgAudioRef.current?.play().catch(() => {})
+  }, [safeSlides, current, playSlide, stopAudio, clearTimers])
 
   const handlePause = useCallback(() => {
     clearTimers(); stopAudio()
@@ -194,24 +214,15 @@ export default function SlidePlayer({
 
   const handleResume = useCallback(() => {
     setIsPlaying(true)
-    if (safeSlides[current]) playSlide(safeSlides[current])
-    bgAudioRef.current?.play().catch(() => {})
-  }, [playSlide, safeSlides, current])
+    if (safeSlides[current]) playSlide(safeSlides[current], isMuted)
+    if (!isMuted) bgAudioRef.current?.play().catch(() => {})
+  }, [playSlide, safeSlides, current, isMuted])
 
   const handleSlideTap = useCallback(() => {
-    if (needsIOSTap) {
-      setNeedsIOSTap(false)
-      setIsStarted(true)
-      setIsPlaying(true)
-      hasAutoPlayed.current = true
-      if (safeSlides[current]) playSlide(safeSlides[current])
-      bgAudioRef.current?.play().catch(() => {})
-      return
-    }
     if (isEnded) return
     if (isPlaying) handlePause()
     else handleResume()
-  }, [needsIOSTap, isEnded, isPlaying, safeSlides, current, playSlide, handlePause, handleResume])
+  }, [isEnded, isPlaying, handlePause, handleResume])
 
   const handleReplay = useCallback(() => {
     setIsEnded(false)
@@ -219,8 +230,8 @@ export default function SlidePlayer({
     setCurrent(0)
     setIsPlaying(true)
     setIsStarted(true)
-    if (safeSlides[0]) playSlide(safeSlides[0])
-  }, [safeSlides, playSlide])
+    if (safeSlides[0]) playSlide(safeSlides[0], isMuted)
+  }, [safeSlides, playSlide, isMuted])
 
   // Keyboard
   useEffect(() => {
@@ -233,7 +244,7 @@ export default function SlidePlayer({
     return () => window.removeEventListener('keydown', onKey)
   }, [current, handleSlideTap, goToSlide])
 
-  // Guard — no slides (אחרי כל ה-hooks!)
+  // Guard — אחרי כל ה-hooks
   if (safeSlides.length === 0 || !slide) return (
     <div className="relative w-full bg-background rounded-xl overflow-hidden" style={{ aspectRatio: '16/9' }}>
       <div className="absolute inset-0 flex items-center justify-center">
@@ -242,7 +253,6 @@ export default function SlidePlayer({
     </div>
   )
 
-  // Touch swipe
   const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX }
   const handleTouchEnd = (e: React.TouchEvent) => {
     const dx = e.changedTouches[0].clientX - touchStartX.current
@@ -267,17 +277,17 @@ export default function SlidePlayer({
         <SlideView slide={slide} isActive />
       </div>
 
-      {/* iOS tap-to-start overlay */}
-      {needsIOSTap && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center cursor-pointer z-10" onClick={handleSlideTap}>
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center hover:bg-white/30 transition-colors">
-              <svg className="w-7 h-7 text-white ml-1" fill="white" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z"/>
-              </svg>
-            </div>
-            <span className="text-white/80 text-sm font-medium text-center px-4">{title}</span>
-          </div>
+      {/* Unmute banner — מופיע רק פעם אחת */}
+      {showUnmuteBanner && !isEnded && (
+        <div className="absolute top-8 left-1/2 -translate-x-1/2 z-30">
+          <button
+            onClick={(e) => { e.stopPropagation(); handleUnmute() }}
+            className="flex items-center gap-2 bg-black/80 backdrop-blur-sm border border-white/20 text-white text-sm font-medium px-4 py-2 rounded-full hover:bg-black/90 transition-colors shadow-lg"
+          >
+            <VolumeX size={15} className="text-white/70" />
+            <span>לחץ להפעלת קול</span>
+            <Volume2 size={15} />
+          </button>
         </div>
       )}
 
@@ -338,13 +348,17 @@ export default function SlidePlayer({
         </button>
       )}
 
-      {/* Bottom bar — mute only */}
+      {/* Bottom bar — mute toggle */}
       {!isEnded && (
         <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/70 to-transparent px-3 pb-3 pt-8 flex items-center justify-end"
           onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-2">
             <span className="text-white/70 text-xs font-mono">{current + 1} / {safeSlides.length}</span>
-            <button onClick={() => setIsMuted(m => !m)}
+            <button
+              onClick={() => {
+                if (isMuted) handleUnmute()
+                else setIsMuted(true)
+              }}
               className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors">
               {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
             </button>
