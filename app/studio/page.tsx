@@ -1,80 +1,54 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { Plus, Eye, Zap, ExternalLink, User, Users, TrendingUp } from 'lucide-react'
+import { Plus, Eye, Zap, ExternalLink, Users, TrendingUp } from 'lucide-react'
 import { CATEGORIES } from '@/lib/types'
- 
+
 export default async function StudioPage() {
   const supabase = createClient()
-  const { data: { session } } = await supabase.auth.getSession()
-  if (!session) redirect('/login')
- 
-  const creatorId = session.user.id
- 
-  const [postsRes, profileRes, statsRes] = await Promise.all([
+
+  // getUser() במקום getSession() השבורה
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const creatorId = user.id
+
+  const [postsRes, statsRes] = await Promise.all([
     supabase
       .from('posts')
       .select('*, product:products(name)')
       .eq('creator_id', creatorId)
       .order('updated_at', { ascending: false }),
-    supabase
-      .from('profiles')
-      .select('username, display_name, avatar_url')
-      .eq('id', creatorId)
-      .single(),
     supabase.rpc('get_creator_stats', { creator_uuid: creatorId }),
   ])
- 
+
   const posts = postsRes.data ?? []
-  const profile = profileRes.data
-  
-  // Handle stats - could be array or object
+
   const rawStats = statsRes.data
   const stats = Array.isArray(rawStats) ? rawStats[0] : rawStats
   const totalViews = stats?.total_views ?? posts.reduce((s: number, p: any) => s + (p.view_count ?? 0), 0)
   const totalTries = stats?.total_tries ?? posts.reduce((s: number, p: any) => s + (p.sandbox_opens ?? 0), 0)
   const totalClicks = stats?.total_clicks ?? posts.reduce((s: number, p: any) => s + (p.link_clicks ?? 0), 0)
   const totalFollowers = stats?.total_followers ?? 0
- 
+
   const fmt = (n: number) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)
- 
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-md border-b border-border">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link href="/" className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-lg bg-primary flex items-center justify-center">
-                <Zap size={12} className="text-white" fill="white" />
-              </div>
-              <span className="font-bold text-text-main">BuildFeed</span>
-            </Link>
-            <span className="text-border">/</span>
-            <span className="text-muted text-sm">Studio</span>
+            <span className="font-bold text-text-main">Studio</span>
           </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/studio/profile"
-              className="flex items-center gap-1.5 text-sm text-muted hover:text-text-main border border-border hover:border-white/20 px-2.5 py-1.5 rounded-lg transition-colors"
-            >
-              {profile?.avatar_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={profile.avatar_url} alt="" className="w-4 h-4 rounded-full" />
-              ) : (
-                <User size={13} />
-              )}
-              פרופיל
-            </Link>
-            <Link
-              href="/studio/new"
-              className="flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
-            >
-              <Plus size={14} /> פוסט חדש
-            </Link>
-          </div>
+          <Link
+            href="/studio/new"
+            className="flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
+          >
+            <Plus size={14} /> פוסט חדש
+          </Link>
         </div>
       </header>
- 
+
       <main className="max-w-4xl mx-auto px-4 py-8 space-y-8">
         {/* Analytics */}
         <section>
@@ -101,6 +75,7 @@ export default async function StudioPage() {
               <p className="text-xs text-muted mt-0.5">עוקבים</p>
             </div>
           </div>
+
           {/* Per-post breakdown */}
           {posts.filter((p: any) => p.status === 'published').length > 0 && (
             <div className="bg-surface border border-border rounded-xl overflow-hidden mt-4">
@@ -128,7 +103,7 @@ export default async function StudioPage() {
             </div>
           )}
         </section>
- 
+
         {/* Posts list */}
         <section>
           <h2 className="text-sm font-medium text-muted uppercase tracking-wider mb-4">הפוסטים שלך</h2>
