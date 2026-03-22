@@ -1,12 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowLeft, ExternalLink, Github, Twitter } from 'lucide-react'
+import { ExternalLink, Github, Twitter } from 'lucide-react'
 import { PRODUCT_TYPES } from '@/lib/types'
 import SlidePlayer from '@/components/player/SlidePlayer'
 import PostActions from '@/components/post/PostActions'
 import NotWorkingButton from '@/components/post/NotWorkingButton'
-import Logo from '@/components/ui/Logo'
 import FollowButtonWrapper from '@/components/ui/FollowButtonWrapper'
 
 interface PostPageClientProps {
@@ -25,21 +24,16 @@ export default function PostPageClient({
   post, slides, category, playerMode, muteByDefault,
   userWorked, userDisliked, userNotWorking, isFollowingCreator,
 }: PostPageClientProps) {
-  const hasCode = slides.some(s => s.slide_type === 'code')
+  const hasCode = slides.some((s: any) => s.slide_type === 'code')
 
   return (
     <div className="min-h-screen bg-background pb-16 sm:pb-0">
-      <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl border-b border-border/50">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href="/" className="text-muted hover:text-text-main transition-colors">
-              <ArrowLeft size={18} />
-            </Link>
-            <Link href="/" className="flex items-center gap-2">
-              <Logo size={22} />
-              <span className="font-bold text-text-main hidden sm:block">BuildFeed</span>
-            </Link>
-          </div>
+      {/* Sub-header (sits below root layout header) */}
+      <div className="bg-background/80 backdrop-blur-xl border-b border-border/50">
+        <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-between">
+          <Link href="/" className="text-xs text-muted hover:text-text-main transition-colors flex items-center gap-1">
+            ← פיד
+          </Link>
           <div className="flex items-center gap-2">
             {hasCode && (
               <span className="hidden sm:flex items-center gap-1 text-xs text-blue-400 bg-blue-400/10 border border-blue-400/20 px-2.5 py-1 rounded-full">
@@ -55,9 +49,9 @@ export default function PostPageClient({
             )}
           </div>
         </div>
-      </header>
+      </div>
 
-      <main className="max-w-5xl mx-auto px-4 py-6">
+      <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
           {/* Player + info */}
@@ -106,31 +100,28 @@ export default function PostPageClient({
               <div className="flex flex-wrap items-center gap-2">
                 {(post.version_tags ?? []).map((v: string) => (
                   <span key={v} className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-blue-400/10 text-blue-400 border border-blue-400/20">
-                    <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.5 7.5h-3v-3a.5.5 0 00-1 0v3h-3a.5.5 0 000 1h3v3a.5.5 0 001 0v-3h3a.5.5 0 000-1z"/></svg>
                     {v}
                   </span>
                 ))}
                 {post.github_url && (
                   <a href={post.github_url} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-white/5 text-muted border border-border hover:text-text-main hover:border-white/20 transition-colors">
-                    <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-                    GitHub
+                    <Github size={11} /> GitHub
                   </a>
                 )}
               </div>
             )}
 
-            {/* Not working badge — if 3+ reports */}
+            {/* Not working alert */}
             {(post.not_working_count ?? 0) >= 3 && (
               <div className="flex items-center gap-2 bg-orange-400/8 border border-orange-400/20 rounded-xl px-3 py-2">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="#fb923c"><path d="M8 1L1 14h14L8 1zm0 3l4.5 8h-9L8 4zm0 3v2h1V7H8zm0 3v1h1v-1H8z"/></svg>
                 <span className="text-xs text-orange-400">
-                  {post.not_working_count} אנשים דיווחו שהקוד כבר לא עובד — ייתכן שהמוצר עודכן
+                  ⚠️ {post.not_working_count} אנשים דיווחו שהקוד כבר לא עובד — ייתכן שהמוצר עודכן
                 </span>
               </div>
             )}
 
-            {/* Action buttons */}
+            {/* Actions */}
             {post.creator && (
               <PostActions
                 postId={post.id}
@@ -275,7 +266,7 @@ export default function PostPageClient({
             </div>
           </div>
         </div>
-      </main>
+      </div>
     </div>
   )
 }
