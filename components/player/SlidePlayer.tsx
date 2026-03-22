@@ -24,6 +24,12 @@ interface SlidePlayerProps {
 
 const MIN_SLIDE_MS = 2000
 
+// מחוץ לקומפוננטה — לא hook
+function checkIsIOS() {
+  if (typeof window === 'undefined') return false
+  return /iPad|iPhone|iPod/.test(navigator.userAgent)
+}
+
 export default function SlidePlayer({
   slides, title, autoPlay = true, onComplete,
   bgAudioUrl, bgAudioVolume = 0.3,
@@ -37,7 +43,6 @@ export default function SlidePlayer({
   const [progress, setProgress] = useState(0)
   const [isLandscape, setIsLandscape] = useState(false)
   const [isEnded, setIsEnded] = useState(false)
-  // iOS requires user gesture before autoplay
   const [needsIOSTap, setNeedsIOSTap] = useState(false)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -52,20 +57,6 @@ export default function SlidePlayer({
   const safeIndex = Math.min(Math.max(0, current), Math.max(0, safeSlides.length - 1))
   const slide = safeSlides[safeIndex]
 
-  if (safeSlides.length === 0 || !slide) return (
-    <div className="relative w-full bg-background rounded-xl overflow-hidden" style={{ aspectRatio: '16/9' }}>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <p className="text-muted text-sm">אין שקפים</p>
-      </div>
-    </div>
-  )
-
-  // Detect iOS
-  const isIOS = useCallback(() => {
-    if (typeof window === 'undefined') return false
-    return /iPad|iPhone|iPod/.test(navigator.userAgent)
-  }, [])
-
   // Landscape detection
   useEffect(() => {
     const check = () => {
@@ -76,7 +67,10 @@ export default function SlidePlayer({
     check()
     window.addEventListener('resize', check)
     window.addEventListener('orientationchange', () => setTimeout(check, 100))
-    return () => { window.removeEventListener('resize', check); window.removeEventListener('orientationchange', check) }
+    return () => {
+      window.removeEventListener('resize', check)
+      window.removeEventListener('orientationchange', check)
+    }
   }, [])
 
   const clearTimers = useCallback(() => {
@@ -133,7 +127,7 @@ export default function SlidePlayer({
     if (hasAudio) {
       const audio = new Audio(s.audio_url!)
       audio.muted = isMuted
-      audio.volume = s.audio_volume ?? 1.0
+      audio.volume = (s as any).audio_volume ?? 1.0
       audioRef.current = audio
       audio.onended = () => {
         clearTimers(); setProgress(100)
@@ -150,10 +144,10 @@ export default function SlidePlayer({
     }
   }, [isMuted, goNext, clearTimers, stopAudio, playerMode])
 
-  // Autoplay on mount (non-iOS)
+  // Autoplay on mount
   useEffect(() => {
     if (!autoPlay || hasAutoPlayed.current) return
-    if (isIOS()) {
+    if (checkIsIOS()) {
       setNeedsIOSTap(true)
       return
     }
@@ -164,7 +158,7 @@ export default function SlidePlayer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Play when current changes
+  // Play when slide changes
   useEffect(() => {
     if (isPlaying && isStarted && safeSlides[current]) {
       playSlide(safeSlides[current])
@@ -204,9 +198,7 @@ export default function SlidePlayer({
     bgAudioRef.current?.play().catch(() => {})
   }, [playSlide, safeSlides, current])
 
-  // Toggle play/pause on slide tap
   const handleSlideTap = useCallback(() => {
-    // iOS first tap — start autoplay
     if (needsIOSTap) {
       setNeedsIOSTap(false)
       setIsStarted(true)
@@ -230,7 +222,7 @@ export default function SlidePlayer({
     if (safeSlides[0]) playSlide(safeSlides[0])
   }, [safeSlides, playSlide])
 
-  // Keyboard controls
+  // Keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight') goToSlide(current + 1)
@@ -240,6 +232,15 @@ export default function SlidePlayer({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [current, handleSlideTap, goToSlide])
+
+  // Guard — no slides (אחרי כל ה-hooks!)
+  if (safeSlides.length === 0 || !slide) return (
+    <div className="relative w-full bg-background rounded-xl overflow-hidden" style={{ aspectRatio: '16/9' }}>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <p className="text-muted text-sm">אין שקפים</p>
+      </div>
+    </div>
+  )
 
   // Touch swipe
   const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX }
@@ -261,12 +262,12 @@ export default function SlidePlayer({
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Slide — tap to toggle play/pause */}
+      {/* Slide */}
       <div className="absolute inset-0 cursor-pointer" onClick={handleSlideTap}>
         <SlideView slide={slide} isActive />
       </div>
 
-      {/* iOS tap-to-start overlay — only on iOS before first tap */}
+      {/* iOS tap-to-start overlay */}
       {needsIOSTap && (
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center cursor-pointer z-10" onClick={handleSlideTap}>
           <div className="flex flex-col items-center gap-3">
@@ -275,43 +276,34 @@ export default function SlidePlayer({
                 <path d="M8 5v14l11-7z"/>
               </svg>
             </div>
-            <span className="text-white/80 text-sm font-medium text-center px-4">הקש להתחלה</span>
+            <span className="text-white/80 text-sm font-medium text-center px-4">{title}</span>
           </div>
         </div>
       )}
 
-      {/* End CTA overlay */}
+      {/* End CTA */}
       {isEnded && (
         <div className="absolute inset-0 bg-black/75 backdrop-blur-sm flex flex-col items-center justify-center z-30 gap-4 px-6">
           <p className="text-white font-semibold text-lg text-center">{title}</p>
           <div className="flex flex-col gap-2 w-full max-w-xs">
             {websiteUrl && (
-              
-                href={websiteUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+              <a href={websiteUrl} target="_blank" rel="noopener noreferrer"
                 className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-4 py-2.5 font-medium transition-colors text-sm"
-                onClick={(e) => e.stopPropagation()}
-              >
+                onClick={(e) => e.stopPropagation()}>
                 <ExternalLink size={15} />
                 בקר באתר המוצר
               </a>
             )}
             {tryVideoUrl && (
-              
-                href={tryVideoUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+              <a href={tryVideoUrl} target="_blank" rel="noopener noreferrer"
                 className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg px-4 py-2.5 font-medium transition-colors text-sm"
-                onClick={(e) => e.stopPropagation()}
-              >
+                onClick={(e) => e.stopPropagation()}>
                 נסה את המוצר
               </a>
             )}
             <button
               onClick={(e) => { e.stopPropagation(); handleReplay() }}
-              className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white rounded-lg px-4 py-2.5 font-medium transition-colors text-sm"
-            >
+              className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white rounded-lg px-4 py-2.5 font-medium transition-colors text-sm">
               <RotateCcw size={14} />
               צפה שוב
             </button>
@@ -323,7 +315,8 @@ export default function SlidePlayer({
       {!isEnded && (
         <div className="absolute top-0 left-0 right-0 flex gap-1 p-2 z-20">
           {safeSlides.map((_, i) => (
-            <div key={i} className="h-0.5 flex-1 bg-white/25 rounded-full overflow-hidden cursor-pointer" onClick={(e) => { e.stopPropagation(); goToSlide(i) }}>
+            <div key={i} className="h-0.5 flex-1 bg-white/25 rounded-full overflow-hidden cursor-pointer"
+              onClick={(e) => { e.stopPropagation(); goToSlide(i) }}>
               <div className="h-full bg-white rounded-full transition-none"
                 style={{ width: i < current ? '100%' : i === current ? progress + '%' : '0%' }} />
             </div>
@@ -333,22 +326,26 @@ export default function SlidePlayer({
 
       {/* Nav arrows */}
       {!isEnded && current > 0 && (
-        <button onClick={(e) => { e.stopPropagation(); goToSlide(current - 1) }} className="absolute left-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors">
+        <button onClick={(e) => { e.stopPropagation(); goToSlide(current - 1) }}
+          className="absolute left-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors">
           <ChevronLeft size={18} />
         </button>
       )}
       {!isEnded && current < safeSlides.length - 1 && (
-        <button onClick={(e) => { e.stopPropagation(); goToSlide(current + 1) }} className="absolute right-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors">
+        <button onClick={(e) => { e.stopPropagation(); goToSlide(current + 1) }}
+          className="absolute right-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors">
           <ChevronRight size={18} />
         </button>
       )}
 
-      {/* Bottom controls — mute only, no play/pause */}
+      {/* Bottom bar — mute only */}
       {!isEnded && (
-        <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/70 to-transparent px-3 pb-3 pt-8 flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+        <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/70 to-transparent px-3 pb-3 pt-8 flex items-center justify-end"
+          onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-2">
             <span className="text-white/70 text-xs font-mono">{current + 1} / {safeSlides.length}</span>
-            <button onClick={() => setIsMuted(m => !m)} className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors">
+            <button onClick={() => setIsMuted(m => !m)}
+              className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors">
               {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
             </button>
           </div>
