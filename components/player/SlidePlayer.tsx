@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Play, Pause, ChevronLeft, ChevronRight, Volume2, VolumeX } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Volume2, VolumeX, ExternalLink, RotateCcw } from 'lucide-react'
 import { Slide } from '@/lib/types'
 import SlideView from './SlideView'
 import PlayerActionsMenu from './PlayerActionsMenu'
@@ -36,6 +36,9 @@ export default function SlidePlayer({
   const [isMuted, setIsMuted] = useState(defaultMuted)
   const [progress, setProgress] = useState(0)
   const [isLandscape, setIsLandscape] = useState(false)
+  const [isEnded, setIsEnded] = useState(false)
+  // iOS requires user gesture before autoplay
+  const [needsIOSTap, setNeedsIOSTap] = useState(false)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const bgAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -43,13 +46,12 @@ export default function SlidePlayer({
   const slideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchStartX = useRef(0)
   const containerRef = useRef<HTMLDivElement>(null)
+  const hasAutoPlayed = useRef(false)
 
-  // Safe slide access — prevent crashes
   const safeSlides = slides?.length > 0 ? slides : []
   const safeIndex = Math.min(Math.max(0, current), Math.max(0, safeSlides.length - 1))
   const slide = safeSlides[safeIndex]
 
-  // Guard — no slides
   if (safeSlides.length === 0 || !slide) return (
     <div className="relative w-full bg-background rounded-xl overflow-hidden" style={{ aspectRatio: '16/9' }}>
       <div className="absolute inset-0 flex items-center justify-center">
@@ -57,6 +59,12 @@ export default function SlidePlayer({
       </div>
     </div>
   )
+
+  // Detect iOS
+  const isIOS = useCallback(() => {
+    if (typeof window === 'undefined') return false
+    return /iPad|iPhone|iPod/.test(navigator.userAgent)
+  }, [])
 
   // Landscape detection
   useEffect(() => {
@@ -85,15 +93,25 @@ export default function SlidePlayer({
     }
   }, [])
 
+  const handleEnd = useCallback(() => {
+    setIsPlaying(false)
+    setIsEnded(true)
+    onComplete?.()
+  }, [onComplete])
+
   const goNext = useCallback(() => {
     stopAudio()
-    if (current < safeSlides.length - 1) { setCurrent(c => c + 1) }
-    else { setIsPlaying(false); setProgress(100); onComplete?.() }
-  }, [current, safeSlides.length, onComplete, stopAudio])
+    if (current < safeSlides.length - 1) {
+      setCurrent(c => c + 1)
+    } else {
+      setProgress(100)
+      handleEnd()
+    }
+  }, [current, safeSlides.length, stopAudio, handleEnd])
 
   const goToSlide = useCallback((idx: number) => {
     if (idx < 0 || idx >= safeSlides.length) return
-    clearTimers(); stopAudio(); setProgress(0); setCurrent(idx)
+    clearTimers(); stopAudio(); setProgress(0); setIsEnded(false); setCurrent(idx)
   }, [safeSlides.length, clearTimers, stopAudio])
 
   const playSlide = useCallback((s: Slide | undefined) => {
@@ -132,7 +150,21 @@ export default function SlidePlayer({
     }
   }, [isMuted, goNext, clearTimers, stopAudio, playerMode])
 
-  // Play current slide when current changes or playing state changes
+  // Autoplay on mount (non-iOS)
+  useEffect(() => {
+    if (!autoPlay || hasAutoPlayed.current) return
+    if (isIOS()) {
+      setNeedsIOSTap(true)
+      return
+    }
+    hasAutoPlayed.current = true
+    setIsStarted(true)
+    setIsPlaying(true)
+    if (safeSlides[0]) playSlide(safeSlides[0])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Play when current changes
   useEffect(() => {
     if (isPlaying && isStarted && safeSlides[current]) {
       playSlide(safeSlides[current])
@@ -140,7 +172,7 @@ export default function SlidePlayer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, isPlaying])
 
-  // Cleanup on unmount
+  // Cleanup
   useEffect(() => {
     return () => { clearTimers(); stopAudio() }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -161,8 +193,7 @@ export default function SlidePlayer({
   }, [isMuted])
 
   const handlePause = useCallback(() => {
-    clearTimers()
-    stopAudio()
+    clearTimers(); stopAudio()
     bgAudioRef.current?.pause()
     setIsPlaying(false)
   }, [clearTimers, stopAudio])
@@ -173,28 +204,42 @@ export default function SlidePlayer({
     bgAudioRef.current?.play().catch(() => {})
   }, [playSlide, safeSlides, current])
 
-  const togglePlay = useCallback(() => {
-    if (!isStarted) {
+  // Toggle play/pause on slide tap
+  const handleSlideTap = useCallback(() => {
+    // iOS first tap — start autoplay
+    if (needsIOSTap) {
+      setNeedsIOSTap(false)
       setIsStarted(true)
       setIsPlaying(true)
+      hasAutoPlayed.current = true
       if (safeSlides[current]) playSlide(safeSlides[current])
       bgAudioRef.current?.play().catch(() => {})
       return
     }
+    if (isEnded) return
     if (isPlaying) handlePause()
     else handleResume()
-  }, [isStarted, isPlaying, safeSlides, current, playSlide, handlePause, handleResume])
+  }, [needsIOSTap, isEnded, isPlaying, safeSlides, current, playSlide, handlePause, handleResume])
+
+  const handleReplay = useCallback(() => {
+    setIsEnded(false)
+    setProgress(0)
+    setCurrent(0)
+    setIsPlaying(true)
+    setIsStarted(true)
+    if (safeSlides[0]) playSlide(safeSlides[0])
+  }, [safeSlides, playSlide])
 
   // Keyboard controls
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight') goToSlide(current + 1)
       if (e.key === 'ArrowLeft') goToSlide(current - 1)
-      if (e.key === ' ') { e.preventDefault(); togglePlay() }
+      if (e.key === ' ') { e.preventDefault(); handleSlideTap() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [current, togglePlay, goToSlide])
+  }, [current, handleSlideTap, goToSlide])
 
   // Touch swipe
   const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX }
@@ -217,59 +262,101 @@ export default function SlidePlayer({
       onTouchEnd={handleTouchEnd}
     >
       {/* Slide — tap to toggle play/pause */}
-      <div className="absolute inset-0 cursor-pointer" onClick={togglePlay}>
+      <div className="absolute inset-0 cursor-pointer" onClick={handleSlideTap}>
         <SlideView slide={slide} isActive />
       </div>
 
-      {/* Start overlay — only before first play */}
-      {!isStarted && (
-        <div className="absolute inset-0 bg-black/60 flex items-center justify-center cursor-pointer z-10" onClick={togglePlay}>
+      {/* iOS tap-to-start overlay — only on iOS before first tap */}
+      {needsIOSTap && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center cursor-pointer z-10" onClick={handleSlideTap}>
           <div className="flex flex-col items-center gap-3">
             <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center hover:bg-white/30 transition-colors">
-              <Play size={28} className="text-white ml-1" fill="white" />
+              <svg className="w-7 h-7 text-white ml-1" fill="white" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
             </div>
-            <span className="text-white/80 text-sm font-medium text-center px-4">{title}</span>
+            <span className="text-white/80 text-sm font-medium text-center px-4">הקש להתחלה</span>
+          </div>
+        </div>
+      )}
+
+      {/* End CTA overlay */}
+      {isEnded && (
+        <div className="absolute inset-0 bg-black/75 backdrop-blur-sm flex flex-col items-center justify-center z-30 gap-4 px-6">
+          <p className="text-white font-semibold text-lg text-center">{title}</p>
+          <div className="flex flex-col gap-2 w-full max-w-xs">
+            {websiteUrl && (
+              
+                href={websiteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-4 py-2.5 font-medium transition-colors text-sm"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ExternalLink size={15} />
+                בקר באתר המוצר
+              </a>
+            )}
+            {tryVideoUrl && (
+              
+                href={tryVideoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg px-4 py-2.5 font-medium transition-colors text-sm"
+                onClick={(e) => e.stopPropagation()}
+              >
+                נסה את המוצר
+              </a>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); handleReplay() }}
+              className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white rounded-lg px-4 py-2.5 font-medium transition-colors text-sm"
+            >
+              <RotateCcw size={14} />
+              צפה שוב
+            </button>
           </div>
         </div>
       )}
 
       {/* Progress bars */}
-      <div className="absolute top-0 left-0 right-0 flex gap-1 p-2 z-20">
-        {safeSlides.map((_, i) => (
-          <div key={i} className="h-0.5 flex-1 bg-white/25 rounded-full overflow-hidden cursor-pointer" onClick={(e) => { e.stopPropagation(); goToSlide(i) }}>
-            <div className="h-full bg-white rounded-full transition-none"
-              style={{ width: i < current ? '100%' : i === current ? progress + '%' : '0%' }} />
-          </div>
-        ))}
-      </div>
+      {!isEnded && (
+        <div className="absolute top-0 left-0 right-0 flex gap-1 p-2 z-20">
+          {safeSlides.map((_, i) => (
+            <div key={i} className="h-0.5 flex-1 bg-white/25 rounded-full overflow-hidden cursor-pointer" onClick={(e) => { e.stopPropagation(); goToSlide(i) }}>
+              <div className="h-full bg-white rounded-full transition-none"
+                style={{ width: i < current ? '100%' : i === current ? progress + '%' : '0%' }} />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Nav arrows */}
-      {current > 0 && (
+      {!isEnded && current > 0 && (
         <button onClick={(e) => { e.stopPropagation(); goToSlide(current - 1) }} className="absolute left-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors">
           <ChevronLeft size={18} />
         </button>
       )}
-      {current < safeSlides.length - 1 && (
+      {!isEnded && current < safeSlides.length - 1 && (
         <button onClick={(e) => { e.stopPropagation(); goToSlide(current + 1) }} className="absolute right-2 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors">
           <ChevronRight size={18} />
         </button>
       )}
 
-      {/* Bottom controls */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/70 to-transparent px-3 pb-3 pt-8 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
-        <button onClick={togglePlay} className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors">
-          {isPlaying ? <Pause size={14} fill="white" /> : <Play size={14} fill="white" className="ml-0.5" />}
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="text-white/70 text-xs font-mono">{current + 1} / {safeSlides.length}</span>
-          <button onClick={() => setIsMuted(m => !m)} className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors">
-            {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
-          </button>
+      {/* Bottom controls — mute only, no play/pause */}
+      {!isEnded && (
+        <div className="absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/70 to-transparent px-3 pb-3 pt-8 flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-2">
+            <span className="text-white/70 text-xs font-mono">{current + 1} / {safeSlides.length}</span>
+            <button onClick={() => setIsMuted(m => !m)} className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center text-white hover:bg-white/30 transition-colors">
+              {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Actions menu */}
-      {postId && creatorId && (
+      {postId && creatorId && !isEnded && (
         <PlayerActionsMenu
           postId={postId}
           creatorId={creatorId}
