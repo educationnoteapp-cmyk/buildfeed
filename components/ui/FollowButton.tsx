@@ -1,8 +1,6 @@
 'use client'
-
 import { useState, useEffect } from 'react'
 import { UserPlus, UserCheck, Bell, BellOff } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 
 interface FollowButtonProps {
   targetId: string
@@ -13,56 +11,52 @@ interface FollowButtonProps {
 export default function FollowButton({ targetId, type, size = 'md' }: FollowButtonProps) {
   const [isFollowing, setIsFollowing] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [session, setSession] = useState<{ user: { id: string } } | null>(null)
-  const supabase = createClient()
+  const [userId, setUserId] = useState<string | null>(null)
 
   useEffect(() => {
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      setSession(session)
+      try {
+        // Use API route instead of broken Supabase client
+        const res = await fetch('/api/auth/me', { signal: AbortSignal.timeout(5000) })
+        if (!res.ok) { setLoading(false); return }
+        const { userId: uid } = await res.json()
+        if (!uid) { setLoading(false); return }
+        setUserId(uid)
 
-      if (!session) { setLoading(false); return }
-
-      const table = type === 'creator' ? 'follows_creators' : 'follows_products'
-      const column = type === 'creator' ? 'following_id' : 'product_id'
-
-      const { data } = await supabase
-        .from(table)
-        .select('*')
-        .eq('follower_id', session.user.id)
-        .eq(column, targetId)
-        .single()
-
-      setIsFollowing(!!data)
-      setLoading(false)
+        // Check follow status
+        const followRes = await fetch(
+          `/api/follow/check?targetId=${targetId}&type=${type}`,
+          { signal: AbortSignal.timeout(5000) }
+        )
+        if (followRes.ok) {
+          const { isFollowing } = await followRes.json()
+          setIsFollowing(isFollowing)
+        }
+      } catch {
+        // timeout or error — show button as not following, let user try
+      } finally {
+        setLoading(false)
+      }
     }
     init()
-  }, [targetId, type, supabase])
+  }, [targetId, type])
 
   const toggle = async () => {
-    if (!session) {
+    if (!userId) {
       window.location.href = '/login'
       return
     }
-
     setLoading(true)
-    const table = type === 'creator' ? 'follows_creators' : 'follows_products'
-    const column = type === 'creator' ? 'following_id' : 'product_id'
-
-    if (isFollowing) {
-      await supabase
-        .from(table)
-        .delete()
-        .eq('follower_id', session.user.id)
-        .eq(column, targetId)
-      setIsFollowing(false)
-    } else {
-      await supabase
-        .from(table)
-        .insert({ follower_id: session.user.id, [column]: targetId })
-      setIsFollowing(true)
+    try {
+      const res = await fetch('/api/follow', {
+        method: isFollowing ? 'DELETE' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetId, type }),
+      })
+      if (res.ok) setIsFollowing(f => !f)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   const Icon = type === 'creator'
