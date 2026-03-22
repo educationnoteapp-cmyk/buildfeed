@@ -39,6 +39,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(result.data)
     }
 
+    case 'worked': {
+      const { data: existing } = await supabase
+        .from('post_worked').select('user_id')
+        .eq('user_id', userId).eq('post_id', post_id).single()
+      if (existing) {
+        await supabase.from('post_worked').delete().eq('user_id', userId).eq('post_id', post_id)
+        await supabase.rpc('decrement_counter', { table_name: 'posts', column_name: 'worked_count', row_id: post_id })
+        return NextResponse.json({ worked: false })
+      } else {
+        await supabase.from('post_worked').insert({ user_id: userId, post_id })
+        await supabase.rpc('increment_counter', { table_name: 'posts', column_name: 'worked_count', row_id: post_id })
+        return NextResponse.json({ worked: true })
+      }
+    }
+
+    case 'not_working': {
+      const { data: existing } = await supabase
+        .from('post_not_working').select('user_id')
+        .eq('user_id', userId).eq('post_id', post_id).single()
+      if (existing) {
+        await supabase.from('post_not_working').delete().eq('user_id', userId).eq('post_id', post_id)
+        await supabase.rpc('decrement_counter', { table_name: 'posts', column_name: 'not_working_count', row_id: post_id })
+        return NextResponse.json({ not_working: false })
+      } else {
+        await supabase.from('post_not_working').insert({ user_id: userId, post_id })
+        await supabase.rpc('increment_counter', { table_name: 'posts', column_name: 'not_working_count', row_id: post_id })
+        return NextResponse.json({ not_working: true })
+      }
+    }
+
     default:
       return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
   }

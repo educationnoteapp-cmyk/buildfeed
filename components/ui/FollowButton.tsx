@@ -1,77 +1,30 @@
 'use client'
-import { useState, useEffect } from 'react'
+
+import { useState } from 'react'
 import { UserPlus, UserCheck, Bell, BellOff } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 
 interface FollowButtonProps {
   targetId: string
   type: 'creator' | 'product'
   size?: 'sm' | 'md'
+  initialIsFollowing?: boolean
 }
 
-export default function FollowButton({ targetId, type, size = 'md' }: FollowButtonProps) {
-  const [isFollowing, setIsFollowing] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [userId, setUserId] = useState<string | null>(null)
-
-  useEffect(() => {
-    const supabase = createClient()
-    const init = async () => {
-      try {
-        // getUser() עובד בצד הלקוח — getSession() תקועה
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) { setLoading(false); return }
-        setUserId(user.id)
-
-        const table = type === 'creator' ? 'follows_creators' : 'follows_products'
-        const column = type === 'creator' ? 'following_id' : 'product_id'
-
-        const { data } = await supabase
-          .from(table)
-          .select('follower_id')
-          .eq('follower_id', user.id)
-          .eq(column, targetId)
-          .maybeSingle()
-
-        setIsFollowing(!!data)
-      } catch {
-        // שגיאה שקטה — הכפתור יוצג כ"עקוב"
-      } finally {
-        setLoading(false)
-      }
-    }
-    init()
-  }, [targetId, type])
+export default function FollowButton({ targetId, type, size = 'md', initialIsFollowing = false }: FollowButtonProps) {
+  const [isFollowing, setIsFollowing] = useState(initialIsFollowing)
+  const [loading, setLoading] = useState(false)
 
   const toggle = async () => {
-    if (!userId) {
-      window.location.href = '/login'
-      return
-    }
-    const supabase = createClient()
     setLoading(true)
-
-    const table = type === 'creator' ? 'follows_creators' : 'follows_products'
-    const column = type === 'creator' ? 'following_id' : 'product_id'
-
-    try {
-      if (isFollowing) {
-        await supabase.from(table).delete()
-          .eq('follower_id', userId)
-          .eq(column, targetId)
-        setIsFollowing(false)
-      } else {
-        await supabase.from(table).insert({
-          follower_id: userId,
-          [column]: targetId,
-        })
-        setIsFollowing(true)
-      }
-    } catch {
-      // שגיאה שקטה
-    } finally {
-      setLoading(false)
-    }
+    const res = await fetch('/api/follow', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_id: targetId, type }),
+    })
+    if (res.status === 401) { window.location.href = '/login'; return }
+    const data = await res.json()
+    if (typeof data.following === 'boolean') setIsFollowing(data.following)
+    setLoading(false)
   }
 
   const Icon = type === 'creator'

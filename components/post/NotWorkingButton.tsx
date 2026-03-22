@@ -1,54 +1,31 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 
-export default function NotWorkingButton({ postId }: { postId: string }) {
-  const [marked, setMarked] = useState(false)
-  const [count, setCount] = useState(0)
+interface NotWorkingButtonProps {
+  postId: string
+  initialMarked?: boolean
+  initialCount?: number
+}
+
+export default function NotWorkingButton({ postId, initialMarked = false, initialCount = 0 }: NotWorkingButtonProps) {
+  const [marked, setMarked] = useState(initialMarked)
+  const [count, setCount] = useState(initialCount)
   const [loading, setLoading] = useState(false)
-  const [session, setSession] = useState<{ user: { id: string } } | null>(null)
-  const supabase = createClient()
-
-  useEffect(() => {
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      setSession(session)
-
-      const { data: post } = await supabase
-        .from('posts').select('not_working_count').eq('id', postId).single()
-      if (post) setCount(post.not_working_count ?? 0)
-
-      if (session) {
-        const { data } = await supabase
-          .from('post_not_working').select('user_id')
-          .eq('user_id', session.user.id).eq('post_id', postId).single()
-        setMarked(!!data)
-      }
-    }
-    init()
-  }, [postId, supabase])
 
   const toggle = async () => {
-    if (!session) { window.location.href = '/login'; return }
     setLoading(true)
-
-    if (marked) {
-      await supabase.from('post_not_working').delete()
-        .eq('user_id', session.user.id).eq('post_id', postId)
-      await supabase.rpc('decrement_counter', {
-        table_name: 'posts', column_name: 'not_working_count', row_id: postId
-      })
-      setCount(c => Math.max(0, c - 1))
-      setMarked(false)
-    } else {
-      await supabase.from('post_not_working').insert({ user_id: session.user.id, post_id: postId })
-      await supabase.rpc('increment_counter', {
-        table_name: 'posts', column_name: 'not_working_count', row_id: postId
-      })
-      setCount(c => c + 1)
-      setMarked(true)
+    const res = await fetch('/api/post/interact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ post_id: postId, action: 'not_working' }),
+    })
+    if (res.status === 401) { window.location.href = '/login'; return }
+    const data = await res.json()
+    if (typeof data.not_working === 'boolean') {
+      setMarked(data.not_working)
+      setCount(c => data.not_working ? c + 1 : Math.max(0, c - 1))
     }
     setLoading(false)
   }

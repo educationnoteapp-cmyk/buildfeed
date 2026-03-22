@@ -3,14 +3,24 @@
 import { useState, useEffect, useRef } from 'react'
 import { Share2, MessageCircle, Play, ThumbsDown, Flag, ChevronDown } from 'lucide-react'
 import WorkedButton from './WorkedButton'
-import { createClient } from '@/lib/supabase/client'
 import FollowButtonWrapper from '@/components/ui/FollowButtonWrapper'
+
+interface Comment {
+  id: string
+  content: string
+  profile?: { username: string; avatar_url?: string }
+}
 
 interface PostActionsProps {
   postId: string
   creatorId: string
   tryVideoUrl?: string | null
   websiteUrl?: string | null
+  initialWorked?: boolean
+  initialWorkedCount?: number
+  initialDisliked?: boolean
+  initialReported?: boolean
+  initialIsFollowingCreator?: boolean
 }
 
 const REPORT_REASONS = [
@@ -21,53 +31,48 @@ const REPORT_REASONS = [
   'אחר',
 ]
 
-export default function PostActions({ postId, creatorId, tryVideoUrl, websiteUrl }: PostActionsProps) {
+export default function PostActions({
+  postId, creatorId, tryVideoUrl, websiteUrl,
+  initialWorked = false, initialWorkedCount = 0,
+  initialDisliked = false, initialReported = false,
+  initialIsFollowingCreator = false,
+}: PostActionsProps) {
   const [showTryVideo, setShowTryVideo] = useState(false)
   const [showComments, setShowComments] = useState(false)
   const [showReportMenu, setShowReportMenu] = useState(false)
-  const [isDisliked, setIsDisliked] = useState(false)
-  const [isReported, setIsReported] = useState(false)
+  const [isDisliked, setIsDisliked] = useState(initialDisliked)
+  const [isReported, setIsReported] = useState(initialReported)
   const [sharing, setSharing] = useState(false)
-  const [comments, setComments] = useState<{ id: string; content: string; profile?: { username: string; avatar_url?: string } }[]>([])
+  const [comments, setComments] = useState<Comment[]>([])
   const [newComment, setNewComment] = useState('')
-  const [session, setSession] = useState<{ user: { id: string } } | null>(null)
+  const [commentsLoaded, setCommentsLoaded] = useState(false)
   const commentInputRef = useRef<HTMLInputElement>(null)
-  const supabase = createClient()
 
+  // Load comments lazily when panel opens
   useEffect(() => {
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      setSession(session)
-      if (!session) return
-
-      const [{ data: dislike }, { data: report }, { data: comms }] = await Promise.all([
-        supabase.from('post_dislikes').select('user_id').eq('user_id', session.user.id).eq('post_id', postId).single(),
-        supabase.from('post_reports').select('id').eq('user_id', session.user.id).eq('post_id', postId).single(),
-        supabase.from('comments').select('*, profile:profiles(username,avatar_url)').eq('post_id', postId).order('created_at', { ascending: true }).limit(20),
-      ])
-      setIsDisliked(!!dislike)
-      setIsReported(!!report)
-      if (comms) setComments(comms)
-    }
-    init()
-  }, [postId, supabase])
+    if (!showComments || commentsLoaded) return
+    fetch(`/api/comments?post_id=${postId}`)
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setComments(data) })
+      .finally(() => setCommentsLoaded(true))
+  }, [showComments, commentsLoaded, postId])
 
   const handleTry = () => {
     if (tryVideoUrl) setShowTryVideo(true)
     else if (websiteUrl) window.open(websiteUrl, '_blank')
-    if (session) fetch('/api/post/interact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_id: postId, action: 'view' }) })
+    fetch('/api/post/interact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_id: postId, action: 'view' }) })
   }
 
   const handleDislike = async () => {
-    if (!session) { window.location.href = '/login'; return }
     const res = await fetch('/api/post/interact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_id: postId, action: 'dislike' }) })
+    if (res.status === 401) { window.location.href = '/login'; return }
     const data = await res.json()
-    setIsDisliked(data.disliked)
+    if (typeof data.disliked === 'boolean') setIsDisliked(data.disliked)
   }
 
   const handleReport = async (reason: string) => {
-    if (!session) { window.location.href = '/login'; return }
-    await fetch('/api/post/interact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_id: postId, action: 'report', reason }) })
+    const res = await fetch('/api/post/interact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_id: postId, action: 'report', reason }) })
+    if (res.status === 401) { window.location.href = '/login'; return }
     setIsReported(true)
     setShowReportMenu(false)
   }
@@ -77,14 +82,20 @@ export default function PostActions({ postId, creatorId, tryVideoUrl, websiteUrl
     const url = window.location.href
     if (navigator.share) await navigator.share({ title: document.title, url }).catch(() => {})
     else await navigator.clipboard.writeText(url).catch(() => {})
-    if (session) fetch('/api/post/interact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_id: postId, action: 'share' }) })
+    fetch('/api/post/interact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_id: postId, action: 'share' }) })
     setTimeout(() => setSharing(false), 1500)
   }
 
   const handleComment = async () => {
-    if (!newComment.trim() || !session) return
-    const { data } = await supabase.from('comments').insert({ post_id: postId, user_id: session.user.id, content: newComment.trim() }).select('*, profile:profiles(username,avatar_url)').single()
-    if (data) { setComments(prev => [...prev, data]); setNewComment('') }
+    if (!newComment.trim()) return
+    const res = await fetch('/api/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ post_id: postId, content: newComment.trim() }),
+    })
+    if (res.status === 401) { window.location.href = '/login'; return }
+    const data = await res.json()
+    if (data?.id) { setComments(prev => [...prev, data]); setNewComment('') }
   }
 
   return (
@@ -111,49 +122,38 @@ export default function PostActions({ postId, creatorId, tryVideoUrl, websiteUrl
 
       {/* Main actions row */}
       <div className="flex items-center gap-2 flex-wrap">
-        {/* נסה — primary */}
         <button onClick={handleTry}
           className="flex items-center gap-2 bg-primary hover:bg-primary/90 text-white text-sm font-medium px-4 py-2.5 rounded-xl transition-colors">
           <Play size={14} fill="white" />
           נסה את זה
         </button>
 
-        <WorkedButton postId={postId} />
+        <WorkedButton postId={postId} initialWorked={initialWorked} initialCount={initialWorkedCount} />
 
-        {/* תגובה */}
         <button onClick={() => { setShowComments(s => !s); setTimeout(() => commentInputRef.current?.focus(), 100) }}
           className="flex items-center gap-2 text-sm text-muted hover:text-text-main border border-border hover:border-white/20 px-3 py-2.5 rounded-xl transition-colors">
           <MessageCircle size={14} />
           תגובה {comments.length > 0 && <span className="text-xs bg-white/10 px-1.5 py-0.5 rounded-full">{comments.length}</span>}
         </button>
 
-        {/* שתף */}
         <button onClick={handleShare}
           className="flex items-center gap-2 text-sm text-muted hover:text-text-main border border-border hover:border-white/20 px-3 py-2.5 rounded-xl transition-colors">
           <Share2 size={14} />
           {sharing ? '✓ הועתק' : 'שתף'}
         </button>
 
-        {/* עקוב */}
-        <FollowButtonWrapper targetId={creatorId} type="creator" size="sm" />
+        <FollowButtonWrapper targetId={creatorId} type="creator" size="sm" initialIsFollowing={initialIsFollowingCreator} />
 
-        {/* דיסלייק + דיווח — בצד שמאל */}
         <div className="mr-auto flex items-center gap-1.5">
-          <button
-            onClick={handleDislike}
-            title="לא רלוונטי"
-            className={'flex items-center gap-1 text-xs px-2.5 py-2 rounded-xl border transition-colors ' + (isDisliked ? 'bg-red-500/15 border-red-500/30 text-red-400' : 'border-border text-muted hover:border-red-500/30 hover:text-red-400')}
-          >
+          <button onClick={handleDislike} title="לא רלוונטי"
+            className={'flex items-center gap-1 text-xs px-2.5 py-2 rounded-xl border transition-colors ' + (isDisliked ? 'bg-red-500/15 border-red-500/30 text-red-400' : 'border-border text-muted hover:border-red-500/30 hover:text-red-400')}>
             <ThumbsDown size={13} />
           </button>
 
           <div className="relative">
-            <button
-              onClick={() => setShowReportMenu(s => !s)}
-              disabled={isReported}
+            <button onClick={() => setShowReportMenu(s => !s)} disabled={isReported}
               title={isReported ? 'דווחת על הפוסט הזה' : 'דווח'}
-              className={'flex items-center gap-1 text-xs px-2.5 py-2 rounded-xl border transition-colors ' + (isReported ? 'border-border text-muted/40 cursor-not-allowed' : 'border-border text-muted hover:border-orange-500/30 hover:text-orange-400')}
-            >
+              className={'flex items-center gap-1 text-xs px-2.5 py-2 rounded-xl border transition-colors ' + (isReported ? 'border-border text-muted/40 cursor-not-allowed' : 'border-border text-muted hover:border-orange-500/30 hover:text-orange-400')}>
               <Flag size={13} />
               <ChevronDown size={10} />
             </button>
@@ -191,16 +191,15 @@ export default function PostActions({ postId, creatorId, tryVideoUrl, websiteUrl
               ))}
             </div>
           )}
-          {comments.length === 0 && (
+          {comments.length === 0 && commentsLoaded && (
             <p className="text-xs text-muted text-center py-6">אין תגובות עדיין — היה הראשון!</p>
           )}
           <div className="flex items-center gap-2 p-3 border-t border-border">
             <div className="w-6 h-6 rounded-full bg-primary/20 flex-shrink-0" />
             <input ref={commentInputRef} value={newComment} onChange={e => setNewComment(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleComment()}
-              placeholder={session ? 'הוסף תגובה...' : 'התחבר כדי להגיב'}
-              disabled={!session}
-              className="flex-1 bg-transparent text-sm text-text-main placeholder-muted focus:outline-none disabled:opacity-50" />
+              placeholder="הוסף תגובה..."
+              className="flex-1 bg-transparent text-sm text-text-main placeholder-muted focus:outline-none" />
             {newComment && <button onClick={handleComment} className="text-xs text-primary font-medium hover:text-secondary transition-colors">שלח</button>}
           </div>
         </div>
