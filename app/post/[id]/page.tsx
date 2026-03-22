@@ -21,15 +21,15 @@ export default async function PostPage({ params }: { params: { id: string } }) {
 
   if (!post || !post.slides) notFound()
 
-  // הגדרות פלייר
+  // הגדרות פלייר — getUser() במקום getSession() השבורה
   let playerMode: 'auto' | 'manual' = 'auto'
   let muteByDefault = false
-  const { data: { session } } = await supabase.auth.getSession()
-  if (session) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (user) {
     const { data: prefs } = await supabase
       .from('profiles')
       .select('player_mode, mute_by_default')
-      .eq('id', session.user.id)
+      .eq('id', user.id)
       .single()
     if (prefs) {
       playerMode = (prefs.player_mode ?? 'auto') as 'auto' | 'manual'
