@@ -1,24 +1,45 @@
-// /[creatorSlug] — public podium page for a creator.
-//
-// This is the page fans visit to see the leaderboard and place bids.
-// Data is fetched server-side for fast initial load and SEO.
-
 import { supabase } from '@/lib/supabase';
-import type { PodiumSpot } from '@/types';
+import CreatorPodiumClient from './CreatorPodiumClient';
 
 interface Props {
   params: { creatorSlug: string };
 }
 
+// Server Component: fetches initial data, passes to client for realtime updates.
 export default async function CreatorPodiumPage({ params }: Props) {
   const { creatorSlug } = params;
 
-  // TODO: fetch creator + podium spots, render Podium + Leaderboard components
+  // Fetch creator by slug
+  const { data: creator } = await supabase
+    .from('creators')
+    .select('*')
+    .eq('slug', creatorSlug)
+    .single();
+
+  if (!creator) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-text-main mb-2">Creator not found</h1>
+          <p className="text-muted">No podium exists for &ldquo;{creatorSlug}&rdquo;</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Fetch the top 10 bids by amount (descending) — these determine the leaderboard positions.
+  // Rank is derived from sort order: highest amount = position 1 (King).
+  const { data: initialBids } = await supabase
+    .from('bids')
+    .select('*')
+    .eq('creator_id', creator.id)
+    .order('amount_paid', { ascending: false })
+    .limit(10);
 
   return (
-    <main>
-      {/* Public podium page — scaffold only */}
-      <h1>{creatorSlug}&apos;s Podium</h1>
-    </main>
+    <CreatorPodiumClient
+      creator={creator}
+      initialBids={initialBids ?? []}
+    />
   );
 }
