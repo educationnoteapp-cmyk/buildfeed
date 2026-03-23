@@ -1,15 +1,13 @@
 'use client';
 
-// CreatorPodiumClient.tsx — Client wrapper that handles realtime subscriptions.
+// CreatorPodiumClient.tsx — Client wrapper with realtime subscriptions.
 //
-// REALTIME STRATEGY:
-// We subscribe to the `bids` table (not podium_spots) because bids is the
-// immutable financial ledger — every new payment triggers an INSERT here.
-// On any new bid event, we re-fetch the top 10 highest bids by amount_paid
-// and re-render the podium. This ensures rankings are always derived from
-// the single source of truth (the bids table, ordered by amount).
+// REALTIME: Subscribes to `bids` table INSERTs for this creator.
+// On any new bid, re-fetches top 10 by amount_paid and re-renders.
+// This triggers all the cascading animations in Podium/Leaderboard.
 
 import { useEffect, useState, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { supabaseBrowser } from '@/lib/supabase-browser';
 import Podium from '@/components/Podium';
 import Leaderboard from '@/components/Leaderboard';
@@ -22,10 +20,9 @@ interface Props {
 }
 
 export default function CreatorPodiumClient({ creator, initialBids }: Props) {
-  // Top 10 bids sorted descending by amount — index 0 = King (#1)
   const [bids, setBids] = useState<Bid[]>(initialBids);
+  const [newBidFlash, setNewBidFlash] = useState(false);
 
-  // Re-fetch top 10 bids from Supabase (called on initial load and on realtime events)
   const fetchBids = useCallback(async () => {
     const { data } = await supabaseBrowser
       .from('bids')
@@ -35,11 +32,12 @@ export default function CreatorPodiumClient({ creator, initialBids }: Props) {
       .limit(10);
     if (data) {
       setBids(data);
+      // Trigger a visual flash to indicate live update
+      setNewBidFlash(true);
+      setTimeout(() => setNewBidFlash(false), 600);
     }
   }, [creator.id]);
 
-  // Subscribe to realtime INSERT events on the `bids` table for this creator.
-  // When any new bid comes in, re-fetch the full top-10 to get correct rankings.
   useEffect(() => {
     const channel = supabaseBrowser
       .channel(`bids:creator:${creator.id}`)
@@ -51,61 +49,85 @@ export default function CreatorPodiumClient({ creator, initialBids }: Props) {
           table: 'bids',
           filter: `creator_id=eq.${creator.id}`,
         },
-        () => {
-          // Don't use the payload directly — re-fetch to get proper top-10 ordering.
-          fetchBids();
-        }
+        () => { fetchBids(); }
       )
       .subscribe();
 
-    return () => {
-      supabaseBrowser.removeChannel(channel);
-    };
+    return () => { supabaseBrowser.removeChannel(channel); };
   }, [creator.id, fetchBids]);
 
-  // Pad to 10 slots (some may be null if fewer than 10 bids exist)
   const allSlots: (Bid | null)[] = Array.from({ length: 10 }, (_, i) => bids[i] ?? null);
-  const podiumSpots = allSlots.slice(0, 3);   // Ranks 1–3
-  const leaderboardSpots = allSlots.slice(3);  // Ranks 4–10
+  const podiumSpots = allSlots.slice(0, 3);
+  const leaderboardSpots = allSlots.slice(3);
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background relative overflow-hidden">
+      {/* Ambient background grid */}
+      <div className="absolute inset-0 bg-grid opacity-50 pointer-events-none" />
+
+      {/* Full-screen flash on new bid via realtime */}
+      <AnimatePresence>
+        {newBidFlash && (
+          <motion.div
+            className="fixed inset-0 z-50 pointer-events-none"
+            style={{
+              background: 'radial-gradient(circle at center 40%, rgba(79,70,229,0.12) 0%, transparent 60%)',
+            }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 1, 0] }}
+            transition={{ duration: 0.6, times: [0, 0.2, 1] }}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Creator Header */}
-      <div className="pt-8 pb-4 text-center">
-        <h1 className="text-2xl font-bold text-text-main">
+      <motion.div
+        className="pt-10 pb-6 text-center relative z-10"
+        initial={{ opacity: 0, y: -16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+      >
+        <h1 className="text-3xl font-extrabold text-text-main tracking-tight">
           {creator.slug}&apos;s
-          <span className="bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent ml-2">
+          <span className="bg-gradient-to-r from-yellow-400 via-primary to-secondary bg-clip-text text-transparent ml-2">
             Ego Podium
           </span>
         </h1>
-        <p className="text-sm text-muted mt-1">
-          Pay to claim your spot. Outbid to take the throne.
+        <p className="text-sm text-muted mt-2 max-w-xs mx-auto">
+          Pay to claim your spot. Outbid anyone to take the throne. No refunds.
         </p>
-      </div>
+      </motion.div>
 
       {/* Podium — top 3 */}
-      <Podium
-        spots={podiumSpots}
-        onBid={() => {}}
-      />
+      <Podium spots={podiumSpots} onBid={() => {}} />
 
       {/* Leaderboard — spots 4–10 */}
-      <Leaderboard
-        spots={leaderboardSpots}
-        onBid={() => {}}
-      />
+      <Leaderboard spots={leaderboardSpots} onBid={() => {}} />
 
       {/* Bid Panel */}
-      <BidButton
-        creatorSlug={creator.slug}
-        currentSpots={allSlots}
-      />
+      <BidButton creatorSlug={creator.slug} currentSpots={allSlots} />
 
       {/* Live indicator */}
-      <div className="flex items-center justify-center gap-2 pb-8">
-        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-        <span className="text-xs text-muted">Live updates</span>
-      </div>
+      <motion.div
+        className="flex items-center justify-center gap-2 pb-10 relative z-10"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 1 }}
+      >
+        <motion.span
+          className="w-2.5 h-2.5 rounded-full bg-green-500"
+          animate={{
+            scale: [1, 1.3, 1],
+            boxShadow: [
+              '0 0 0 0 rgba(34,197,94,0.4)',
+              '0 0 0 6px rgba(34,197,94,0)',
+              '0 0 0 0 rgba(34,197,94,0.4)',
+            ],
+          }}
+          transition={{ duration: 2, repeat: Infinity }}
+        />
+        <span className="text-xs text-muted font-medium tracking-wide">LIVE</span>
+      </motion.div>
     </div>
   );
 }

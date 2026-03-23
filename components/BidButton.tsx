@@ -6,19 +6,44 @@
 // - Fan enters any dollar amount they want to bid.
 // - Minimum entry: $5, or (current #10's amount + $1) if the board is full.
 // - The system auto-places the fan at the correct position based on amount rank.
-// - Highest bid = #1 (King), lowest on-board bid = #10.
-// - Flow: validate amount → /api/moderate (check message) → /api/checkout (Stripe session).
+// - Heartbeat pulse animation while user is typing an amount.
+// - Flow: validate → /api/moderate → /api/checkout → Stripe redirect.
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Bid, ModerationResult } from '@/types';
 
-const ABSOLUTE_MINIMUM_CENTS = 500; // $5 minimum always
+const ABSOLUTE_MINIMUM_CENTS = 500;
 
 interface BidButtonProps {
   creatorSlug: string;
-  currentSpots: (Bid | null)[]; // All 10 spots, sorted by rank
+  currentSpots: (Bid | null)[];
   disabled?: boolean;
+}
+
+// ---- Heartbeat pulse ring that activates while typing ----
+function HeartbeatRing({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="absolute inset-0 rounded-2xl pointer-events-none overflow-hidden">
+      <motion.div
+        className="absolute inset-0 rounded-2xl border-2 border-primary/40"
+        animate={{
+          scale: [1, 1.02, 1],
+          opacity: [0.4, 0.8, 0.4],
+        }}
+        transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <motion.div
+        className="absolute inset-0 rounded-2xl"
+        style={{
+          background: 'radial-gradient(ellipse at center, rgba(79,70,229,0.06) 0%, transparent 70%)',
+        }}
+        animate={{ opacity: [0.3, 0.7, 0.3] }}
+        transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+      />
+    </div>
+  );
 }
 
 export default function BidButton({ creatorSlug, currentSpots, disabled = false }: BidButtonProps) {
@@ -28,28 +53,24 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const [isTypingAmount, setIsTypingAmount] = useState(false);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // Calculate the minimum bid: max($5, current #10 amount + $1)
+  // Minimum bid: max($5, current #10 amount + $1)
   const minimumBidCents = useMemo(() => {
-    // Find the lowest occupied spot (the #10 or last occupied position)
     const occupiedSpots = currentSpots.filter((s): s is Bid => s !== null);
-    if (occupiedSpots.length < 10) {
-      // Board isn't full yet — minimum is $5
-      return ABSOLUTE_MINIMUM_CENTS;
-    }
-    // Board is full — must outbid #10 (last spot) by at least $1
+    if (occupiedSpots.length < 10) return ABSOLUTE_MINIMUM_CENTS;
     const lowestBid = occupiedSpots[occupiedSpots.length - 1];
     return Math.max(ABSOLUTE_MINIMUM_CENTS, lowestBid.amount_paid + 100);
   }, [currentSpots]);
 
   const minimumBidDollars = (minimumBidCents / 100).toFixed(0);
 
-  // Calculate which position the fan would land at
+  // Projected position
   const projectedPosition = useMemo(() => {
     const cents = Math.round(parseFloat(amountDollars || '0') * 100);
     if (cents < minimumBidCents) return null;
     const occupiedSpots = currentSpots.filter((s): s is Bid => s !== null);
-    // Position = 1 + count of existing bids higher than this one
     const higherCount = occupiedSpots.filter((s) => s.amount_paid >= cents).length;
     return Math.min(higherCount + 1, 10);
   }, [amountDollars, currentSpots, minimumBidCents]);
@@ -61,23 +82,27 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
     return `#${pos}`;
   };
 
+  // Heartbeat: track when user is actively typing the amount
+  const handleAmountChange = (val: string) => {
+    setAmountDollars(val);
+    setIsTypingAmount(true);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => setIsTypingAmount(false), 2000);
+  };
+
+  useEffect(() => {
+    return () => { if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); };
+  }, []);
+
   const handleSubmit = async () => {
     setError(null);
     const cents = Math.round(parseFloat(amountDollars) * 100);
 
-    // Validate
-    if (!fanHandle.trim()) {
-      setError('Enter your handle');
-      return;
-    }
-    if (isNaN(cents) || cents < minimumBidCents) {
-      setError(`Minimum bid is $${minimumBidDollars}`);
-      return;
-    }
+    if (!fanHandle.trim()) { setError('Enter your handle'); return; }
+    if (isNaN(cents) || cents < minimumBidCents) { setError(`Minimum bid is $${minimumBidDollars}`); return; }
 
     setLoading(true);
     try {
-      // Step 1: Moderate the message (if provided)
       if (message.trim()) {
         const modRes = await fetch('/api/moderate', {
           method: 'POST',
@@ -92,7 +117,6 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
         }
       }
 
-      // Step 2: Create Stripe checkout session
       const checkoutRes = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -118,55 +142,80 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
   };
 
   return (
-    <div className="w-full max-w-lg mx-auto px-4 mt-8 mb-12">
-      {/* Toggle Button */}
+    <div className="w-full max-w-lg mx-auto px-4 mt-10 mb-12">
+      {/* Collapsed: CTA button */}
       {!isOpen ? (
         <motion.button
           onClick={() => setIsOpen(true)}
           disabled={disabled}
-          className="w-full py-4 rounded-2xl font-bold text-lg text-white
-                     bg-gradient-to-r from-primary to-secondary
-                     hover:shadow-[0_0_30px_rgba(79,70,229,0.4)]
-                     disabled:opacity-50 disabled:cursor-not-allowed
-                     transition-shadow"
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
+          className="w-full py-5 rounded-2xl font-extrabold text-lg text-white relative overflow-hidden
+                     bg-gradient-to-r from-primary via-secondary to-primary bg-[length:200%_100%]
+                     disabled:opacity-50 disabled:cursor-not-allowed"
+          animate={{
+            backgroundPosition: ['0% 0%', '100% 0%', '0% 0%'],
+          }}
+          transition={{ duration: 4, repeat: Infinity, ease: 'linear' }}
+          whileHover={{
+            scale: 1.02,
+            boxShadow: '0 0 40px rgba(79,70,229,0.4), 0 0 80px rgba(124,58,237,0.2)',
+          }}
+          whileTap={{ scale: 0.97 }}
         >
-          Claim Your Spot — from ${minimumBidDollars}
+          <span className="relative z-10">
+            Claim Your Spot — from ${minimumBidDollars}
+          </span>
+          {/* Shimmer sweep */}
+          <motion.div
+            className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
+            animate={{ x: ['-100%', '200%'] }}
+            transition={{ duration: 2.5, repeat: Infinity, repeatDelay: 1 }}
+          />
         </motion.button>
       ) : (
         <AnimatePresence>
           <motion.div
-            initial={{ opacity: 0, y: 20, height: 0 }}
-            animate={{ opacity: 1, y: 0, height: 'auto' }}
-            exit={{ opacity: 0, y: 20, height: 0 }}
-            className="bg-surface border border-border rounded-2xl p-6 space-y-4"
+            initial={{ opacity: 0, y: 24, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 24, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 200, damping: 20 }}
+            className="bg-surface border border-border rounded-2xl p-6 space-y-5 relative"
           >
+            {/* Heartbeat ring when typing amount */}
+            <HeartbeatRing active={isTypingAmount && !!amountDollars} />
+
             {/* Header */}
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-text-main">Place Your Bid</h3>
-              <button
+              <h3 className="text-lg font-extrabold text-text-main tracking-wide">Place Your Bid</h3>
+              <motion.button
                 onClick={() => { setIsOpen(false); setError(null); }}
-                className="text-muted hover:text-text-main transition-colors text-sm"
+                className="text-muted hover:text-text-main transition-colors text-sm px-2 py-1 rounded-lg
+                           hover:bg-background"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
               >
                 Cancel
-              </button>
+              </motion.button>
             </div>
 
             {/* Minimum entry info */}
-            <div className="bg-background/60 rounded-xl px-4 py-3 border border-border/50">
-              <span className="text-xs text-muted">Minimum entry:</span>
-              <span className="text-sm font-bold text-primary ml-2">${minimumBidDollars}</span>
-              <span className="text-xs text-muted ml-1">
-                {currentSpots.filter(Boolean).length >= 10
-                  ? '(current #10 + $1)'
-                  : '(board has open spots)'}
+            <div className="bg-background/80 rounded-xl px-4 py-3 border border-primary/20">
+              <span className="text-xs text-muted">Minimum entry: </span>
+              <motion.span
+                className="text-sm font-extrabold text-primary"
+                key={minimumBidDollars}
+                initial={{ scale: 1.2 }}
+                animate={{ scale: 1 }}
+              >
+                ${minimumBidDollars}
+              </motion.span>
+              <span className="text-xs text-muted ml-1.5">
+                {currentSpots.filter(Boolean).length >= 10 ? '(outbid #10 + $1)' : '(open spots available)'}
               </span>
             </div>
 
-            {/* Handle input */}
+            {/* Handle */}
             <div>
-              <label className="text-xs text-muted mb-1 block">Your Handle</label>
+              <label className="text-xs text-muted mb-1.5 block font-medium tracking-wide">YOUR HANDLE</label>
               <input
                 type="text"
                 value={fanHandle}
@@ -174,14 +223,14 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
                 placeholder="@yourname"
                 maxLength={30}
                 className="w-full bg-background border border-border rounded-xl px-4 py-3
-                           text-text-main placeholder:text-muted/50 text-sm
-                           focus:outline-none focus:border-primary transition-colors"
+                           text-text-main placeholder:text-muted/40 text-sm
+                           focus:outline-none focus:border-primary/60 focus:shadow-[0_0_0_3px_rgba(79,70,229,0.1)] transition-all"
               />
             </div>
 
-            {/* Message input */}
+            {/* Message */}
             <div>
-              <label className="text-xs text-muted mb-1 block">Message (optional)</label>
+              <label className="text-xs text-muted mb-1.5 block font-medium tracking-wide">MESSAGE (OPTIONAL)</label>
               <input
                 type="text"
                 value={message}
@@ -189,64 +238,72 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
                 placeholder="Shoutout to the creator!"
                 maxLength={100}
                 className="w-full bg-background border border-border rounded-xl px-4 py-3
-                           text-text-main placeholder:text-muted/50 text-sm
-                           focus:outline-none focus:border-primary transition-colors"
+                           text-text-main placeholder:text-muted/40 text-sm
+                           focus:outline-none focus:border-primary/60 focus:shadow-[0_0_0_3px_rgba(79,70,229,0.1)] transition-all"
               />
             </div>
 
-            {/* Amount input */}
+            {/* Amount */}
             <div>
-              <label className="text-xs text-muted mb-1 block">Your Bid (USD)</label>
+              <label className="text-xs text-muted mb-1.5 block font-medium tracking-wide">YOUR BID (USD)</label>
               <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted text-lg">$</span>
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted text-xl font-bold">$</span>
                 <input
                   type="number"
                   value={amountDollars}
-                  onChange={(e) => setAmountDollars(e.target.value)}
+                  onChange={(e) => handleAmountChange(e.target.value)}
                   placeholder={minimumBidDollars}
                   min={parseInt(minimumBidDollars)}
                   step="1"
-                  className="w-full bg-background border border-border rounded-xl pl-9 pr-4 py-3
-                             text-text-main text-lg font-bold
-                             focus:outline-none focus:border-primary transition-colors
+                  className="w-full bg-background border border-border rounded-xl pl-10 pr-4 py-4
+                             text-text-main text-2xl font-extrabold
+                             focus:outline-none focus:border-primary/60 focus:shadow-[0_0_0_3px_rgba(79,70,229,0.15)] transition-all
                              [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none
                              [&::-webkit-inner-spin-button]:appearance-none"
                 />
               </div>
             </div>
 
-            {/* Projected position preview */}
+            {/* Projected position */}
             <AnimatePresence mode="wait">
               {projectedPosition && (
                 <motion.div
                   key={projectedPosition}
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className={`rounded-xl px-4 py-3 text-center border ${
+                  initial={{ opacity: 0, scale: 0.9, y: 8 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: -8 }}
+                  transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                  className={`rounded-xl px-4 py-4 text-center border relative overflow-hidden ${
                     projectedPosition <= 3
                       ? 'bg-yellow-500/10 border-yellow-500/30'
                       : 'bg-primary/10 border-primary/30'
                   }`}
                 >
-                  <span className="text-xs text-muted">You would land at</span>
-                  <span className={`text-lg font-bold ml-2 ${
+                  <span className="text-xs text-muted">You would land at </span>
+                  <span className={`text-xl font-extrabold ml-1 ${
                     projectedPosition === 1 ? 'text-yellow-400' : 'text-primary'
                   }`}>
                     {positionLabel(projectedPosition)}
                   </span>
+                  {projectedPosition === 1 && (
+                    <motion.div
+                      className="absolute inset-0 bg-gradient-to-r from-yellow-500/0 via-yellow-500/10 to-yellow-500/0"
+                      animate={{ x: ['-100%', '100%'] }}
+                      transition={{ duration: 2, repeat: Infinity }}
+                    />
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
 
-            {/* Error message */}
+            {/* Error */}
             <AnimatePresence>
               {error && (
                 <motion.p
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
-                  className="text-red-400 text-sm text-center bg-red-500/10 rounded-xl px-4 py-2"
+                  className="text-red-400 text-sm text-center bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 font-medium"
                 >
                   {error}
                 </motion.p>
@@ -257,21 +314,26 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
             <motion.button
               onClick={handleSubmit}
               disabled={loading || disabled}
-              className="w-full py-4 rounded-xl font-bold text-white
+              className="w-full py-4 rounded-xl font-extrabold text-white relative overflow-hidden
                          bg-gradient-to-r from-primary to-secondary
-                         hover:shadow-[0_0_24px_rgba(79,70,229,0.35)]
-                         disabled:opacity-50 disabled:cursor-not-allowed
-                         transition-shadow text-base"
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.98 }}
+                         disabled:opacity-50 disabled:cursor-not-allowed text-base"
+              whileHover={{
+                scale: 1.01,
+                boxShadow: '0 0 30px rgba(79,70,229,0.35)',
+              }}
+              whileTap={{ scale: 0.97 }}
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <motion.span
+                    className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 0.7, repeat: Infinity, ease: 'linear' }}
+                  />
                   Processing...
                 </span>
               ) : (
-                'Pay & Claim Spot'
+                <span className="relative z-10">Pay & Claim Spot</span>
               )}
             </motion.button>
           </motion.div>
