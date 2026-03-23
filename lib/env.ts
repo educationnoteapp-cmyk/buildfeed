@@ -23,6 +23,11 @@ type EnvKey = typeof REQUIRED_SERVER_VARS[number];
 type ValidatedEnv = Record<EnvKey, string>;
 
 function validateEnv(): ValidatedEnv {
+  // During `next build` static page-data collection, env vars are not
+  // available. Skip strict validation so the build succeeds; the check
+  // still runs at runtime on the first request to any route that imports env.
+  const isBuildPhase = process.env.NEXT_PHASE === 'phase-production-build';
+
   const missing: string[] = [];
 
   for (const key of REQUIRED_SERVER_VARS) {
@@ -31,7 +36,7 @@ function validateEnv(): ValidatedEnv {
     }
   }
 
-  if (missing.length > 0) {
+  if (!isBuildPhase && missing.length > 0) {
     throw new Error(
       `[Creator Podium] Missing required environment variables:\n` +
         missing.map((k) => `  • ${k}`).join('\n') +
@@ -40,7 +45,7 @@ function validateEnv(): ValidatedEnv {
   }
 
   return Object.fromEntries(
-    REQUIRED_SERVER_VARS.map((k) => [k, process.env[k]!])
+    REQUIRED_SERVER_VARS.map((k) => [k, process.env[k] ?? ''])
   ) as ValidatedEnv;
 }
 

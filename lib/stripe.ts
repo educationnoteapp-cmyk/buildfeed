@@ -1,9 +1,13 @@
 import Stripe from 'stripe';
 
+// Fallback placeholder prevents Stripe constructor from throwing during
+// `next build` static page-data collection when env vars aren't available.
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ?? 'sk_test_placeholder';
+
 // Default Stripe client using the platform's secret key.
 // For per-creator charges, instantiate a new Stripe client with the
 // creator's own stripe_secret_key (stored in the `creators` table).
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+export const stripe = new Stripe(STRIPE_SECRET_KEY, {
   apiVersion: '2026-02-25.clover',
 });
 

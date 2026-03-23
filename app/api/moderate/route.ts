@@ -14,7 +14,7 @@ import type { ModerationResult } from '@/types';
 // Validate env at import time — throws clearly if anything is missing
 void env;
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY ?? 'placeholder-openai-key' });
 
 // Human-readable labels for OpenAI moderation categories
 const CATEGORY_LABELS: Record<string, string> = {
