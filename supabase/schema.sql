@@ -59,17 +59,62 @@ create index if not exists podium_spots_creator_position_idx
   on podium_spots (creator_id, position asc);
 
 -- ------------------------------------------------------------
+-- bids (Financial Ledger)
+-- Immutable log of every successful payment. Unlike podium_spots,
+-- rows here are NEVER deleted or overwritten — they serve as the
+-- source of truth for disputes, refund eligibility checks, and
+-- analytics. Every time a fan is displaced from podium_spots, their
+-- original bid record remains here for auditing.
+-- ------------------------------------------------------------
+create table if not exists bids (
+  id                        uuid primary key default gen_random_uuid(),
+  creator_id                uuid references creators(id) on delete cascade,
+  fan_handle                text not null,
+  fan_avatar_url            text,
+  message                   text,                      -- pre-moderated via OpenAI
+  amount_paid               integer not null,           -- in cents (USD)
+  stripe_payment_intent_id  text unique not null,      -- idempotency key & audit trail
+  created_at                timestamptz default now()
+);
+
+-- Index for per-creator bid history queries (analytics / dashboard)
+create index if not exists bids_creator_id_idx on bids (creator_id, created_at desc);
+
+-- ------------------------------------------------------------
+-- creators — plan_type column
+-- Controls feature gating (e.g. max spots, custom branding).
+-- 'starter' is the free tier; upgrade path: 'pro', 'elite'.
+-- ------------------------------------------------------------
+alter table creators add column if not exists
+  plan_type text not null default 'starter';
+
+-- ------------------------------------------------------------
 -- Row-Level Security
 -- Public can read podium spots (leaderboard is public).
 -- Only service-role (API routes) can insert/update/delete.
 -- ------------------------------------------------------------
 alter table creators enable row level security;
 alter table podium_spots enable row level security;
+alter table bids enable row level security;
 
 -- Public read access for podium spots
 create policy "Public can read podium spots"
   on podium_spots for select
   using (true);
 
+-- Public read access for bids (fans can see the bid history)
+create policy "Public can read bids"
+  on bids for select
+  using (true);
+
 -- Service role has full access (bypasses RLS by default)
 -- No additional policies needed for service role.
+
+-- ------------------------------------------------------------
+-- Supabase Realtime
+-- Enables live leaderboard updates without polling.
+-- podium_spots: fans see the board change instantly when outbid.
+-- bids: dashboard can stream incoming payments in real time.
+-- ------------------------------------------------------------
+alter publication supabase_realtime add table podium_spots;
+alter publication supabase_realtime add table bids;
