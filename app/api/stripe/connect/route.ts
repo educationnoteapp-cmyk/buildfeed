@@ -19,6 +19,7 @@ import { supabaseAdmin } from '@/lib/supabase';
 
 const STRIPE_CLIENT_ID      = process.env.STRIPE_CLIENT_ID!;
 const STRIPE_CONNECT_SCOPES = 'read_write';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(req: NextRequest) {
   const { searchParams, origin } = req.nextUrl;
@@ -28,6 +29,38 @@ export async function GET(req: NextRequest) {
 
   // ── Step 4+5: OAuth callback — exchange code for account ID ──────────────
   if (code && state) {
+    // CSRF protection: validate state is a well-formed UUID before any DB query
+    if (!UUID_RE.test(state)) {
+      return NextResponse.redirect(
+        `${origin}/dashboard?stripe_connect=error&reason=invalid_state`
+      );
+    }
+
+    // Verify the callback belongs to the currently authenticated user.
+    // Without this check, a CSRF attack could associate a Stripe account
+    // with a creator the attacker doesn't own by crafting a callback URL
+    // with an arbitrary state (creator_id).
+    const supabaseCallback = createClient();
+    const { data: { session: callbackSession } } = await supabaseCallback.auth.getSession();
+
+    if (!callbackSession) {
+      return NextResponse.redirect(`${origin}/login`);
+    }
+
+    // Confirm the creator in state belongs to the authenticated user
+    const { data: ownerCheck } = await supabaseAdmin
+      .from('creators')
+      .select('id')
+      .eq('id', state)
+      .eq('auth_user_id', callbackSession.user.id)
+      .maybeSingle();
+
+    if (!ownerCheck) {
+      return NextResponse.redirect(
+        `${origin}/dashboard?stripe_connect=error&reason=unauthorized_state`
+      );
+    }
+
     try {
       // Exchange authorization code for the connected account token
       const response = await stripe.oauth.token({

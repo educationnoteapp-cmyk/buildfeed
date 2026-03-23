@@ -286,7 +286,7 @@ export default function LoginPage() {
               <motion.button
                 onClick={() => setShowSignIn(true)}
                 className="text-xs text-slate-600 hover:text-slate-400 transition-colors underline
-                           underline-offset-2"
+                           underline-offset-2 py-3 px-4 min-h-[44px] inline-flex items-center"
                 whileHover={{ scale: 1.02 }}
               >
                 Already have access? Sign in

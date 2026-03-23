@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { createClient } from '@/lib/supabase/client';
 
 interface PlanActionsProps {
   creatorId: string;
@@ -23,7 +22,6 @@ export default function PlanActions({
   foundingCount,
   onPlanChange,
 }: PlanActionsProps) {
-  const supabase = createClient();
   const [saving, setSaving] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
@@ -35,13 +33,16 @@ export default function PlanActions({
       return;
     }
     setSaving(planKey);
-    const { error } = await supabase
-      .from('creators')
-      .update({ plan_type: planKey })
-      .eq('id', creatorId);
 
-    if (error) {
-      setFlash({ type: 'err', text: error.message });
+    const res = await fetch('/api/admin/set-plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ creatorId, planType: planKey }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: 'Unknown error' }));
+      setFlash({ type: 'err', text: body.error ?? 'Failed to update plan' });
     } else {
       onPlanChange(creatorId, planKey);
       setFlash({ type: 'ok', text: `Set to ${planKey}` });

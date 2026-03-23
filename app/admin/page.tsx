@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { createClient } from '@/lib/supabase/client';
 import { getSession } from '@/lib/auth';
 import PlanActions from './PlanActions';
 import type { Bid } from '@/types';
@@ -96,8 +95,7 @@ function StatCard({
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 export default function AdminPage() {
-  const supabase = createClient();
-  const router   = useRouter();
+  const router = useRouter();
 
   const [ready,   setReady]   = useState(false);
   const [loading, setLoading] = useState(true);
@@ -109,6 +107,7 @@ export default function AdminPage() {
   // Registration & waitlist
   const [regOpen,          setRegOpen]          = useState(true);
   const [togglingReg,      setTogglingReg]       = useState(false);
+  const [regToggleError,   setRegToggleError]    = useState<string | null>(null);
   const [waitlist,         setWaitlist]          = useState<WaitlistEntry[]>([]);
   const [loadingWaitlist,  setLoadingWaitlist]   = useState(false);
 
@@ -128,79 +127,76 @@ export default function AdminPage() {
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Data loader ─────────────────────────────────────────────────────────
+  // ── Data loader — uses server API routes to bypass RLS ───────────────────
+  // Direct browser-client queries are blocked by RLS:
+  //   - creators: "own-row only" policy (admin can't see all rows)
+  //   - waitlist: no read policy
+  //   - site_settings: no update policy
+  // All privileged reads/writes go through /api/admin/* routes.
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    // Fetch registration status
-    const { data: siteSetting } = await supabase
-      .from('site_settings')
-      .select('is_registration_open')
-      .eq('id', 1)
-      .single();
-    setRegOpen(siteSetting?.is_registration_open ?? true);
+    // Fetch creators, bids, and registration status via admin API
+    const dataRes = await fetch('/api/admin/data');
+    if (dataRes.ok) {
+      const { creators: rawCreators, bids: allBids, is_registration_open } = await dataRes.json() as {
+        creators: Array<Omit<CreatorRow, 'total_bids' | 'total_revenue'>>;
+        bids: Array<{ id: string; creator_id: string; fan_handle: string; message: string | null; amount_paid: number; created_at: string }>;
+        is_registration_open: boolean;
+      };
 
-    // Fetch waitlist
+      setRegOpen(is_registration_open);
+
+      // Aggregate per-creator bid stats
+      const agg: Record<string, { count: number; revenue: number }> = {};
+      allBids.forEach((b) => {
+        if (!agg[b.creator_id]) agg[b.creator_id] = { count: 0, revenue: 0 };
+        agg[b.creator_id].count   += 1;
+        agg[b.creator_id].revenue += b.amount_paid;
+      });
+
+      // Build enriched creator rows
+      const rows: CreatorRow[] = rawCreators.map((c) => ({
+        ...c,
+        total_bids:    agg[c.id]?.count   ?? 0,
+        total_revenue: agg[c.id]?.revenue ?? 0,
+      }));
+
+      // Slug lookup map for the recent bids feed
+      const slugMap: Record<string, string> = {};
+      rows.forEach((c) => { slugMap[c.id] = c.slug; });
+
+      // Last 20 bids enriched with creator slug
+      const recent: RecentBid[] = allBids.slice(0, 20).map((b) => ({
+        id:           b.id,
+        creator_id:   b.creator_id,
+        fan_handle:   b.fan_handle,
+        message:      b.message ?? null,
+        amount_paid:  b.amount_paid,
+        created_at:   b.created_at,
+        creator_slug: slugMap[b.creator_id] ?? '?',
+      }));
+
+      const totalRevenue  = rows.reduce((s, c) => s + c.total_revenue, 0);
+      const totalBids     = rows.reduce((s, c) => s + c.total_bids,    0);
+      const foundingCount = rows.filter((c) => c.plan_type === 'founding').length;
+
+      setCreators(rows);
+      setRecentBids(recent);
+      setStats({ totalCreators: rows.length, totalBids, totalRevenue, foundingCount });
+    }
+
+    // Fetch waitlist via admin API
     setLoadingWaitlist(true);
-    const { data: wl } = await supabase
-      .from('waitlist')
-      .select('id, email, created_at')
-      .order('created_at', { ascending: false });
-    setWaitlist(wl ?? []);
+    const wlRes = await fetch('/api/admin/waitlist');
+    if (wlRes.ok) {
+      const { waitlist: wl } = await wlRes.json() as { waitlist: WaitlistEntry[] };
+      setWaitlist(wl);
+    }
     setLoadingWaitlist(false);
 
-    // Fetch all creators
-    const { data: rawCreators } = await supabase
-      .from('creators')
-      .select('id, slug, plan_type, auth_user_id, created_at')
-      .order('created_at', { ascending: false });
-
-    // Fetch all bids (we only pull the fields we need)
-    const { data: allBids } = await supabase
-      .from('bids')
-      .select('id, creator_id, fan_handle, message, amount_paid, created_at')
-      .order('created_at', { ascending: false });
-
-    // Aggregate per-creator bid stats
-    const agg: Record<string, { count: number; revenue: number }> = {};
-    (allBids ?? []).forEach((b) => {
-      if (!agg[b.creator_id]) agg[b.creator_id] = { count: 0, revenue: 0 };
-      agg[b.creator_id].count   += 1;
-      agg[b.creator_id].revenue += b.amount_paid;
-    });
-
-    // Build enriched creator rows
-    const rows: CreatorRow[] = (rawCreators ?? []).map((c) => ({
-      ...c,
-      total_bids:    agg[c.id]?.count   ?? 0,
-      total_revenue: agg[c.id]?.revenue ?? 0,
-    }));
-
-    // Slug lookup map for the recent bids feed
-    const slugMap: Record<string, string> = {};
-    rows.forEach((c) => { slugMap[c.id] = c.slug; });
-
-    // Last 20 bids enriched with creator slug
-    const recent: RecentBid[] = (allBids ?? []).slice(0, 20).map((b) => ({
-      id:          b.id,
-      creator_id:  b.creator_id,
-      fan_handle:  b.fan_handle,
-      message:     b.message ?? null,
-      amount_paid: b.amount_paid,
-      created_at:  b.created_at,
-      creator_slug: slugMap[b.creator_id] ?? '?',
-    }));
-
-    // Platform-wide stats
-    const totalRevenue  = rows.reduce((s, c) => s + c.total_revenue, 0);
-    const totalBids     = rows.reduce((s, c) => s + c.total_bids,    0);
-    const foundingCount = rows.filter((c) => c.plan_type === 'founding').length;
-
-    setCreators(rows);
-    setRecentBids(recent);
-    setStats({ totalCreators: rows.length, totalBids, totalRevenue, foundingCount });
     setLoading(false);
-  }, [supabase]);
+  }, []);
 
   useEffect(() => {
     if (ready) loadData();
@@ -221,22 +217,35 @@ export default function AdminPage() {
   }, []);
 
   // ── Toggle registration open/closed ─────────────────────────────────────
+  // Uses /api/admin/toggle-registration because site_settings has no browser-client
+  // update policy; only the service role (used server-side) can write to it.
   const handleToggleRegistration = async () => {
     setTogglingReg(true);
+    setRegToggleError(null);
     const newVal = !regOpen;
-    const { error } = await supabase
-      .from('site_settings')
-      .update({ is_registration_open: newVal })
-      .eq('id', 1);
-    if (!error) setRegOpen(newVal);
+
+    const res = await fetch('/api/admin/toggle-registration', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_registration_open: newVal }),
+    });
+
+    if (res.ok) {
+      setRegOpen(newVal);
+    } else {
+      const body = await res.json().catch(() => ({ error: 'Unknown error' }));
+      setRegToggleError(body.error ?? 'Failed to update registration status');
+    }
     setTogglingReg(false);
   };
 
   // ── Export waitlist as CSV ────────────────────────────────────────────────
+  // Double-quotes inside emails are escaped as "" (RFC 4180 CSV standard).
   const handleExportCSV = () => {
+    const escapeCSV = (s: string) => `"${s.replace(/"/g, '""')}"`;
     const rows = [
       'email,joined',
-      ...waitlist.map((e) => `"${e.email}","${new Date(e.created_at).toISOString()}"`),
+      ...waitlist.map((e) => `${escapeCSV(e.email)},${escapeCSV(new Date(e.created_at).toISOString())}`),
     ];
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
     const url  = URL.createObjectURL(blob);
@@ -315,7 +324,7 @@ export default function AdminPage() {
           <motion.button
             onClick={handleToggleRegistration}
             disabled={togglingReg}
-            className={`w-full flex items-center justify-between gap-4 px-6 py-5 rounded-2xl border
+            className={`w-full flex items-center justify-between gap-4 px-6 py-5 min-h-[72px] rounded-2xl border
                         font-bold text-lg transition-all disabled:opacity-60 disabled:cursor-not-allowed
                         ${regOpen
                           ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300 hover:bg-emerald-950/50'
@@ -375,6 +384,21 @@ export default function AdminPage() {
               ) : regOpen ? 'Click to close' : 'Click to open'}
             </span>
           </motion.button>
+
+          <AnimatePresence>
+            {regToggleError && (
+              <motion.p
+                key="reg-error"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mt-2 text-sm text-red-400 bg-red-950/40 border border-red-800/30
+                           rounded-xl px-4 py-3"
+              >
+                ⚠ {regToggleError}
+              </motion.p>
+            )}
+          </AnimatePresence>
         </section>
 
         {/* ══════════════════════════════════════════════════════════════════
