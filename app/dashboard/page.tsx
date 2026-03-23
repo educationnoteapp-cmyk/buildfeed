@@ -3,9 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence, useMotionValue, useSpring, animate as fmAnimate } from 'framer-motion';
-import { createClient } from '@/lib/supabase/client';
 import { getSession, signOut } from '@/lib/auth';
-import RollingNumber from '@/components/RollingNumber';
 import type { User } from '@supabase/supabase-js';
 import type { Bid } from '@/types';
 
@@ -40,12 +38,26 @@ function RollingCount({ value, className }: { value: number; className?: string 
   );
 }
 
+
 // ── Types ───────────────────────────────────────────────────────────────────
 interface Analytics {
-  totalRevenueCents: number;
   totalBids: number;
-  currentKing: Bid | null;
-  avgBidCents: number;
+  totalCents: number;
+  kingCents: number;
+  kingHandle: string | null;
+  avgCents: number;
+  hasSeedData: boolean;
+  seedBids: Bid[];
+}
+
+interface EditRow {
+  id: string;
+  fanHandle: string;
+  message: string;
+  avatarUrl: string | null;
+  amountDollars: number;
+  saving: boolean;
+  saveMsg: string | null;
 }
 
 interface CreatorRow {
@@ -104,8 +116,6 @@ const PLAN_CONFIG: Record<string, {
 
 // ── Component ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const supabase = createClient();
-
   // Auth
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -125,11 +135,17 @@ export default function DashboardPage() {
 
   // Analytics
   const [analytics, setAnalytics] = useState<Analytics>({
-    totalRevenueCents: 0,
     totalBids: 0,
-    currentKing: null,
-    avgBidCents: 0,
+    totalCents: 0,
+    kingCents: 0,
+    kingHandle: null,
+    avgCents: 0,
+    hasSeedData: false,
+    seedBids: [],
   });
+
+  // Demo fan editor
+  const [editRows, setEditRows] = useState<EditRow[]>([]);
 
   // Seeding
   const [seeding, setSeeding] = useState(false);
@@ -171,18 +187,6 @@ export default function DashboardPage() {
     if (!user) return;
 
     async function loadOrCreate() {
-      const { data: existing } = await supabase
-        .from('creators')
-        .select('*')
-        .eq('auth_user_id', user!.id)
-        .maybeSingle();
-
-      if (existing) {
-        hydrate(existing);
-        return;
-      }
-
-      // First login — create creator row via API (uses supabaseAdmin to bypass RLS)
       const emailUser = (user!.email ?? '').split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '') || 'creator';
       const tempSlug = `${emailUser}-${user!.id.slice(0, 6)}`;
 
@@ -209,25 +213,41 @@ export default function DashboardPage() {
 
   // ── Analytics ──────────────────────────────────────────────────────────────
   const fetchAnalytics = useCallback(async (cid: string) => {
-    const { data: bids } = await supabase
-      .from('bids')
-      .select('*')
-      .eq('creator_id', cid);
-
-    const totalRevenueCents = bids?.reduce((s, b) => s + b.amount_paid, 0) ?? 0;
-    const totalBids = bids?.length ?? 0;
-    const avgBidCents = totalBids > 0 ? Math.round(totalRevenueCents / totalBids) : 0;
-
-    const king = bids?.length
-      ? bids.reduce((best, b) => (b.amount_paid > best.amount_paid ? b : best), bids[0])
-      : null;
-
-    setAnalytics({ totalRevenueCents, totalBids, currentKing: king ?? null, avgBidCents });
-  }, [supabase]);
+    const res = await fetch(`/api/podium/bids?creator_id=${cid}`);
+    if (!res.ok) return;
+    const body = await res.json() as {
+      bids?: Bid[]; seedBids?: Bid[]; totalBids?: number; totalCents?: number;
+      kingCents?: number; kingHandle?: string; avgCents?: number; hasSeedData?: boolean;
+    };
+    setAnalytics({
+      totalBids: body.totalBids ?? 0,
+      totalCents: body.totalCents ?? 0,
+      kingCents: body.kingCents ?? 0,
+      kingHandle: body.kingHandle ?? null,
+      avgCents: body.avgCents ?? 0,
+      hasSeedData: body.hasSeedData ?? false,
+      seedBids: body.seedBids ?? [],
+    });
+  }, []);
 
   useEffect(() => {
     if (creator?.id) fetchAnalytics(creator.id);
   }, [creator?.id, fetchAnalytics]);
+
+  // ── Drive editRows from analytics.seedBids ──────────────────────────────
+  useEffect(() => {
+    const seeds = analytics.seedBids;
+    if (seeds.length === 0) { setEditRows([]); return; }
+    setEditRows(seeds.map((b) => ({
+      id: b.id,
+      fanHandle: b.fan_handle,
+      message: b.message ?? '',
+      avatarUrl: b.fan_avatar_url ?? null,
+      amountDollars: Math.round(b.amount_paid / 100),
+      saving: false,
+      saveMsg: null,
+    })));
+  }, [analytics.seedBids]);
 
   // ── Save slug ──────────────────────────────────────────────────────────────
   const handleSaveSlug = async () => {
@@ -277,7 +297,6 @@ export default function DashboardPage() {
 
     const res = await fetch('/api/dashboard/seed', { method: 'POST' });
     const body = await res.json() as { ok?: boolean; error?: string };
-
     if (!res.ok) {
       setSeedMsg(`Error: ${body.error ?? 'Failed to seed'}`);
     } else {
@@ -285,6 +304,31 @@ export default function DashboardPage() {
       fetchAnalytics(creator.id);
     }
     setSeeding(false);
+  };
+
+  // ── Save a demo fan row ────────────────────────────────────────────────────
+  const handleSaveRow = async (id: string) => {
+    const row = editRows.find(r => r.id === id);
+    if (!row) return;
+    setEditRows(prev => prev.map(r => r.id === id ? { ...r, saving: true, saveMsg: null } : r));
+    const res = await fetch('/api/dashboard/seed/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bidId: id,
+        fanHandle: row.fanHandle,
+        message: row.message,
+        fanAvatarUrl: row.avatarUrl,
+        amountDollars: row.amountDollars,
+      }),
+    });
+    const body = await res.json() as { success?: boolean; error?: string };
+    if (res.ok) {
+      setEditRows(prev => prev.map(r => r.id === id ? { ...r, saving: false, saveMsg: '✓ Saved' } : r));
+      if (creator?.id) fetchAnalytics(creator.id);
+    } else {
+      setEditRows(prev => prev.map(r => r.id === id ? { ...r, saving: false, saveMsg: `Error: ${body.error ?? 'Failed'}` } : r));
+    }
   };
 
   // ── Loading ────────────────────────────────────────────────────────────────
@@ -378,10 +422,9 @@ export default function DashboardPage() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4
                            hover:border-green-800/50 transition-colors group">
               <span className="text-[10px] text-slate-500 tracking-widest uppercase block mb-2">Revenue</span>
-              <RollingNumber
-                value={analytics.totalRevenueCents}
-                className="text-2xl font-bold text-green-400"
-              />
+              <span className="text-2xl font-bold text-green-400">
+                ${(analytics.totalCents / 100).toFixed(0)}
+              </span>
             </div>
 
             {/* Total bids */}
@@ -394,18 +437,17 @@ export default function DashboardPage() {
               />
             </div>
 
-            {/* Current King */}
+            {/* King */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4
                            hover:border-yellow-800/50 transition-colors">
               <span className="text-[10px] text-slate-500 tracking-widest uppercase block mb-2">King</span>
               <span className="text-base font-bold text-yellow-400 truncate block">
-                {analytics.currentKing?.fan_handle ?? '—'}
+                {analytics.kingHandle ?? '—'}
               </span>
-              {analytics.currentKing && (
-                <RollingNumber
-                  value={analytics.currentKing.amount_paid}
-                  className="text-xs text-slate-500 mt-0.5"
-                />
+              {analytics.kingCents > 0 && (
+                <span className="text-xs text-slate-500 mt-0.5 block">
+                  ${(analytics.kingCents / 100).toFixed(0)}
+                </span>
               )}
             </div>
 
@@ -413,10 +455,9 @@ export default function DashboardPage() {
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4
                            hover:border-violet-800/50 transition-colors">
               <span className="text-[10px] text-slate-500 tracking-widest uppercase block mb-2">Avg Bid</span>
-              <RollingNumber
-                value={analytics.avgBidCents}
-                className="text-2xl font-bold text-violet-400"
-              />
+              <span className="text-2xl font-bold text-violet-400">
+                ${(analytics.avgCents / 100).toFixed(0)}
+              </span>
             </div>
           </div>
         </motion.section>
@@ -686,6 +727,74 @@ export default function DashboardPage() {
             )}
           </AnimatePresence>
         </motion.section>
+
+        {/* ── SECTION 4b: Manage Demo Fans ──────────────────────────────────── */}
+        {analytics.seedBids.length > 0 && (
+          <motion.section
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.31 }}
+          >
+            <div>
+              <h3 className="text-lg font-bold text-white">Manage Demo Fans</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Edit your seeded demo bids — these are fake fans you control</p>
+            </div>
+            <div className="space-y-3">
+              {editRows.map((row) => (
+                <div key={row.id} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={row.avatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(row.fanHandle)}`}
+                      alt={row.fanHandle}
+                      className="w-10 h-10 rounded-full object-cover border border-slate-700 bg-slate-800 flex-shrink-0"
+                    />
+                    <input
+                      value={row.fanHandle}
+                      onChange={e => setEditRows(prev => prev.map(r => r.id === row.id ? { ...r, fanHandle: e.target.value } : r))}
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white
+                                 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/60"
+                      placeholder="@handle"
+                    />
+                    <input
+                      type="number"
+                      value={row.amountDollars}
+                      onChange={e => setEditRows(prev => prev.map(r => r.id === row.id ? { ...r, amountDollars: Number(e.target.value) } : r))}
+                      className="w-20 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white
+                                 focus:outline-none focus:border-indigo-500/60"
+                      placeholder="$"
+                      min={1}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={row.message}
+                      onChange={e => setEditRows(prev => prev.map(r => r.id === row.id ? { ...r, message: e.target.value } : r))}
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white
+                                 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/60"
+                      placeholder="Message…"
+                    />
+                    <motion.button
+                      onClick={() => handleSaveRow(row.id)}
+                      disabled={row.saving}
+                      className="px-4 py-1.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500
+                                 text-white disabled:opacity-50 transition-colors flex-shrink-0"
+                      whileTap={{ scale: 0.96 }}
+                    >
+                      {row.saving ? '…' : 'Save'}
+                    </motion.button>
+                  </div>
+                  {row.saveMsg && (
+                    <p className={`text-xs ${row.saveMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                      {row.saveMsg}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </motion.section>
+        )}
 
         {/* ── SECTION 5: Plan Badge ─────────────────────────────────────────── */}
         <motion.section
