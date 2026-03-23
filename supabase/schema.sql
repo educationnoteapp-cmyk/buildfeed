@@ -145,3 +145,55 @@ create policy if not exists "Creators can update own row"
 -- ------------------------------------------------------------
 alter publication supabase_realtime add table podium_spots;
 alter publication supabase_realtime add table bids;
+
+-- ------------------------------------------------------------
+-- process_bid_and_update_podium
+-- Atomic stored procedure that inserts a bid and rebuilds the
+-- podium_spots table for a creator in a single transaction.
+--
+-- Idempotency: ON CONFLICT DO NOTHING on stripe_payment_intent_id
+-- means duplicate Stripe webhook deliveries are safely ignored.
+-- The podium is always rebuilt from the top-10 bids by amount_paid.
+-- ------------------------------------------------------------
+create or replace function process_bid_and_update_podium(
+  p_creator_id    uuid,
+  p_fan_handle    text,
+  p_avatar        text,
+  p_message       text,
+  p_amount        integer,
+  p_stripe_intent text
+) returns void
+language plpgsql
+as $$
+begin
+  -- Insert the bid; silently skip duplicates (Stripe retry-safety)
+  insert into bids (
+    creator_id, fan_handle, fan_avatar_url,
+    message, amount_paid, stripe_payment_intent_id
+  ) values (
+    p_creator_id, p_fan_handle, p_avatar,
+    p_message, p_amount, p_stripe_intent
+  )
+  on conflict (stripe_payment_intent_id) do nothing;
+
+  -- Atomically rebuild podium_spots: clear then re-insert top 10
+  delete from podium_spots where creator_id = p_creator_id;
+
+  insert into podium_spots (
+    creator_id, position, fan_handle, fan_avatar_url,
+    message, amount_paid, stripe_payment_intent_id
+  )
+  select
+    p_creator_id,
+    row_number() over (order by amount_paid desc)::smallint as position,
+    fan_handle,
+    fan_avatar_url,
+    message,
+    amount_paid,
+    stripe_payment_intent_id
+  from bids
+  where creator_id = p_creator_id
+  order by amount_paid desc
+  limit 10;
+end;
+$$;

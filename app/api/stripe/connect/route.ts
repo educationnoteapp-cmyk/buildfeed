@@ -33,7 +33,7 @@ const STRIPE_CODE_RE = /^ac_[a-zA-Z0-9]+$/;
 export async function GET(req: NextRequest) {
   // ── Rate limit: 3 requests per IP per minute ─────────────────────────────
   const ip = getClientIp(req.headers);
-  const rl = rateLimit(`stripe-connect:${ip}`, 3, 60_000);
+  const rl = await rateLimit(`stripe-connect:${ip}`, 3, 10_000);
   if (!rl.success) {
     return NextResponse.redirect(
       `${req.nextUrl.origin}/dashboard?stripe_connect=error&reason=too_many_requests`

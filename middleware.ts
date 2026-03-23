@@ -37,7 +37,7 @@ export async function middleware(request: NextRequest) {
 
   // ── Rate limit public podium pages ────────────────────────────────────────
   if (PODIUM_PAGE_RE.test(pathname)) {
-    const rl = rateLimit(`page:${ip}`, 60, 60_000);
+    const rl = await rateLimit(`page:${ip}`, 60, 10_000);
     if (!rl.success) {
       const res = new NextResponse('Too Many Requests', {
         status: 429,

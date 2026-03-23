@@ -55,7 +55,9 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
   const [error, setError] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isTypingAmount, setIsTypingAmount] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Minimum bid: max($5, current #10 amount + $1)
   const minimumBidCents = useMemo(() => {
@@ -92,16 +94,35 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
   };
 
   useEffect(() => {
-    return () => { if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); };
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (cooldownRef.current) clearInterval(cooldownRef.current);
+    };
   }, []);
+
+  // Start a 3-second cooldown after any failed bid attempt
+  const startCooldown = () => {
+    if (cooldownRef.current) clearInterval(cooldownRef.current);
+    setCooldownSeconds(3);
+    cooldownRef.current = setInterval(() => {
+      setCooldownSeconds((s) => {
+        if (s <= 1) {
+          clearInterval(cooldownRef.current!);
+          cooldownRef.current = null;
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  };
 
   const handleSubmit = async () => {
     setError(null);
     const cents = Math.round(parseFloat(amountDollars) * 100);
 
-    if (!fanHandle.trim()) { setError('Enter your handle'); return; }
-    if (isNaN(cents) || cents < minimumBidCents) { setError(`Minimum bid is $${minimumBidDollars}`); return; }
-    if (cents > MAXIMUM_BID_DOLLARS * 100) { setError(`Maximum bid is $${MAXIMUM_BID_DOLLARS} during launch`); return; }
+    if (!fanHandle.trim()) { setError('Enter your handle'); startCooldown(); return; }
+    if (isNaN(cents) || cents < minimumBidCents) { setError(`Minimum bid is $${minimumBidDollars}`); startCooldown(); return; }
+    if (cents > MAXIMUM_BID_DOLLARS * 100) { setError(`Maximum bid is $${MAXIMUM_BID_DOLLARS} during launch`); startCooldown(); return; }
 
     setLoading(true);
     try {
@@ -115,6 +136,7 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
         if (!modData.allowed) {
           setError(modData.reason || 'Message not allowed');
           setLoading(false);
+          startCooldown();
           return;
         }
       }
@@ -133,11 +155,14 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
       const checkoutData = await checkoutRes.json();
       if (checkoutData.url) {
         window.location.href = checkoutData.url;
+        // No cooldown on success — user is redirected to Stripe
       } else {
         setError(checkoutData.error || 'Failed to create checkout session');
+        startCooldown();
       }
     } catch {
       setError('Something went wrong. Try again.');
+      startCooldown();
     } finally {
       setLoading(false);
     }
@@ -315,14 +340,14 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
             {/* Submit */}
             <motion.button
               onClick={handleSubmit}
-              disabled={loading || disabled}
+              disabled={loading || disabled || cooldownSeconds > 0}
               className="w-full py-4 min-h-[56px] rounded-xl font-extrabold text-white relative overflow-hidden
                          bg-gradient-to-r from-primary to-secondary
                          disabled:opacity-50 disabled:cursor-not-allowed text-base"
-              whileHover={{
+              whileHover={cooldownSeconds === 0 ? {
                 scale: 1.01,
                 boxShadow: '0 0 30px rgba(79,70,229,0.35)',
-              }}
+              } : {}}
               whileTap={{ scale: 0.97 }}
             >
               {loading ? (
@@ -333,6 +358,10 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
                     transition={{ duration: 0.7, repeat: Infinity, ease: 'linear' }}
                   />
                   Processing...
+                </span>
+              ) : cooldownSeconds > 0 ? (
+                <span className="relative z-10 tabular-nums">
+                  Try again in {cooldownSeconds}s...
                 </span>
               ) : (
                 <span className="relative z-10">Pay & Claim Spot</span>

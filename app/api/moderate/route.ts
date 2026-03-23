@@ -39,7 +39,7 @@ const ModerateSchema = z.object({
 export async function POST(req: NextRequest) {
   // ── Rate limit: 10 requests per IP per minute ────────────────────────────
   const ip = getClientIp(req.headers);
-  const rl = rateLimit(`moderate:${ip}`, 10, 60_000);
+  const rl = await rateLimit(`moderate:${ip}`, 10, 10_000);
   if (!rl.success) {
     return NextResponse.json(
       { allowed: false, reason: 'Too many requests. Please slow down.' } satisfies ModerationResult,

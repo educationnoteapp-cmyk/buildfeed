@@ -36,7 +36,7 @@ const CheckoutSchema = z.object({
   fanHandle:    noHtml.min(1).max(30),
   message:      noHtml.max(100).optional(),
   amountCents:  z
-    .number({ invalid_type_error: 'amountCents must be a number' })
+    .number()
     .int('amountCents must be a whole number')
     .min(ABSOLUTE_MINIMUM_CENTS, `Minimum bid is $${ABSOLUTE_MINIMUM_CENTS / 100}`)
     .max(MAXIMUM_BID_CENTS,       `Maximum bid is $${MAXIMUM_BID_CENTS / 100} during launch`),
@@ -46,7 +46,7 @@ const CheckoutSchema = z.object({
 export async function POST(req: NextRequest) {
   // ── Rate limit: 5 requests per IP per minute ─────────────────────────────
   const ip = getClientIp(req.headers);
-  const rl = rateLimit(`checkout:${ip}`, 5, 60_000);
+  const rl = await rateLimit(`checkout:${ip}`, 5, 10_000);
   if (!rl.success) {
     return NextResponse.json(
       { error: 'Too many requests. Please try again later.' },
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
 
     const parsed = CheckoutSchema.safeParse(rawBody);
     if (!parsed.success) {
-      const firstError = parsed.error.errors[0];
+      const firstError = parsed.error.issues[0];
       return NextResponse.json(
         { error: firstError?.message ?? 'Invalid request' },
         { status: 400 }

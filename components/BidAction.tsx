@@ -20,7 +20,7 @@
 //
 // Submit flow: /api/moderate → inline error if flagged → /api/checkout → Stripe
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface BidActionProps {
@@ -43,6 +43,27 @@ export default function BidAction({
   const [amountDollars, setAmountDollars] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => { if (cooldownRef.current) clearInterval(cooldownRef.current); };
+  }, []);
+
+  const startCooldown = () => {
+    if (cooldownRef.current) clearInterval(cooldownRef.current);
+    setCooldownSeconds(3);
+    cooldownRef.current = setInterval(() => {
+      setCooldownSeconds((s) => {
+        if (s <= 1) {
+          clearInterval(cooldownRef.current!);
+          cooldownRef.current = null;
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  };
 
   // ── Derived values ──────────────────────────────────────────
   const amountCents = useMemo(() => {
@@ -68,14 +89,17 @@ export default function BidAction({
 
     if (!fanHandle.trim()) {
       setError("Enter your handle");
+      startCooldown();
       return;
     }
     if (amountCents < minimumCents) {
       setError(`Minimum bid is $${minimumDollars}`);
+      startCooldown();
       return;
     }
     if (amountCents > MAXIMUM_BID_DOLLARS * 100) {
       setError(`Maximum bid is $${MAXIMUM_BID_DOLLARS} during launch`);
+      startCooldown();
       return;
     }
 
@@ -92,6 +116,7 @@ export default function BidAction({
         if (!modData.allowed) {
           setError("Message not allowed ❌");
           setLoading(false);
+          startCooldown();
           return;
         }
       }
@@ -111,11 +136,14 @@ export default function BidAction({
       const data = await checkoutRes.json();
       if (data.url) {
         window.location.href = data.url;
+        // No cooldown on success — user is redirected to Stripe
       } else {
         setError(data.error || "Failed to create checkout session");
+        startCooldown();
       }
     } catch {
       setError("Something went wrong. Try again.");
+      startCooldown();
     } finally {
       setLoading(false);
     }
@@ -273,7 +301,7 @@ export default function BidAction({
         {/* ── The Radioactive Submit Button ── */}
         <motion.button
           onClick={handleSubmit}
-          disabled={loading}
+          disabled={loading || cooldownSeconds > 0}
           className={
             "w-full py-5 rounded-xl font-extrabold text-white text-base relative overflow-hidden " +
             "disabled:opacity-50 disabled:cursor-not-allowed " +
@@ -302,6 +330,10 @@ export default function BidAction({
                 transition={{ duration: 0.7, repeat: Infinity, ease: "linear" }}
               />
               Processing...
+            </span>
+          ) : cooldownSeconds > 0 ? (
+            <span className="relative z-10 tabular-nums">
+              Try again in {cooldownSeconds}s...
             </span>
           ) : (
             <span className="relative z-10">

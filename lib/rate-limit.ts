@@ -1,64 +1,93 @@
-// lib/rate-limit.ts — In-memory sliding-window rate limiter.
+// lib/rate-limit.ts — Distributed sliding-window rate limiter via Upstash Redis.
 //
-// Designed for Next.js API routes (Node.js runtime only).
-// State lives in module-level memory, so it resets on cold starts —
-// good enough for MVP without a Redis dependency.
+// Uses @upstash/ratelimit with the "slidingWindow" algorithm so limits hold
+// correctly across all serverless instances (no per-instance memory state).
 //
-// Usage:
-//   const result = rateLimit(`checkout:${ip}`, 5, 60_000);
+// FAIL-OPEN: if Redis is unreachable or Upstash env vars are missing, the
+// request is ALLOWED and a warning is logged. This prevents a Redis outage
+// from taking down the app.
+//
+// Per-route limits (window = 10 seconds):
+//   checkout:      5 requests / 10 s
+//   moderate:     10 requests / 10 s
+//   stripe-connect: 3 requests / 10 s
+//   (page routes) 60 requests / 10 s  — middleware uses its own instance
+//
+// Usage (identical to the old in-memory version):
+//   const result = rateLimit(`checkout:${ip}`, 5, 10_000);
 //   if (!result.success) return 429 with Retry-After: result.retryAfter
 
-interface WindowEntry {
-  timestamps: number[];
+import { Ratelimit } from '@upstash/ratelimit';
+import { Redis }     from '@upstash/redis';
+
+// ── Build a limiter lazily so the module doesn't throw at import time ────────
+// If env vars are absent we use `null` and fall back to fail-open behaviour.
+
+let redis: Redis | null = null;
+
+function getRedis(): Redis | null {
+  if (redis) return redis;
+  const url   = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  redis = new Redis({ url, token });
+  return redis;
 }
 
-const store = new Map<string, WindowEntry>();
-let lastCleanup = Date.now();
-const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+// Cache limiters keyed by "maxRequests:windowMs" so we re-use instances.
+const limiterCache = new Map<string, Ratelimit>();
 
-/** Prune stale entries from the store to prevent unbounded memory growth. */
-function maybeCleanup(windowMs: number): void {
-  const now = Date.now();
-  if (now - lastCleanup < CLEANUP_INTERVAL_MS) return;
-  for (const [key, entry] of store.entries()) {
-    entry.timestamps = entry.timestamps.filter((t) => now - t < windowMs);
-    if (entry.timestamps.length === 0) store.delete(key);
-  }
-  lastCleanup = now;
+function getLimiter(maxRequests: number, windowMs: number): Ratelimit | null {
+  const r = getRedis();
+  if (!r) return null;
+
+  const cacheKey = `${maxRequests}:${windowMs}`;
+  if (limiterCache.has(cacheKey)) return limiterCache.get(cacheKey)!;
+
+  const limiter = new Ratelimit({
+    redis: r,
+    limiter: Ratelimit.slidingWindow(maxRequests, `${windowMs}ms`),
+    analytics: false,
+  });
+  limiterCache.set(cacheKey, limiter);
+  return limiter;
 }
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Sliding-window rate limiter.
+ * Sliding-window rate limiter backed by Upstash Redis.
  *
  * @param key         Unique key per resource+identity (e.g. `checkout:1.2.3.4`)
- * @param maxRequests Maximum number of requests allowed within `windowMs`
- * @param windowMs    Sliding window size in milliseconds (default: 60 s)
+ * @param maxRequests Maximum requests allowed within `windowMs`
+ * @param windowMs    Window size in milliseconds (default: 10 s)
  * @returns `{ success: true }` or `{ success: false, retryAfter: seconds }`
  */
-export function rateLimit(
+export async function rateLimit(
   key: string,
   maxRequests: number,
-  windowMs = 60_000,
-): { success: true } | { success: false; retryAfter: number } {
-  const now = Date.now();
+  windowMs = 10_000,
+): Promise<{ success: true } | { success: false; retryAfter: number }> {
+  const limiter = getLimiter(maxRequests, windowMs);
 
-  maybeCleanup(windowMs);
-
-  const entry: WindowEntry = store.get(key) ?? { timestamps: [] };
-
-  // Evict timestamps outside the sliding window
-  entry.timestamps = entry.timestamps.filter((t) => now - t < windowMs);
-
-  if (entry.timestamps.length >= maxRequests) {
-    // Oldest timestamp tells us when the window opens up again
-    const oldestTs = entry.timestamps[0];
-    const retryAfter = Math.max(1, Math.ceil((oldestTs + windowMs - now) / 1000));
-    return { success: false, retryAfter };
+  if (!limiter) {
+    // Upstash not configured — fail open
+    console.warn('[rate-limit] Upstash not configured; allowing request (fail-open)');
+    return { success: true };
   }
 
-  entry.timestamps.push(now);
-  store.set(key, entry);
-  return { success: true };
+  try {
+    const result = await limiter.limit(key);
+    if (result.success) return { success: true };
+
+    // reset is a Unix timestamp in ms when the window resets
+    const retryAfter = Math.max(1, Math.ceil((result.reset - Date.now()) / 1000));
+    return { success: false, retryAfter };
+  } catch (err) {
+    // Redis unreachable — fail open to avoid blocking legitimate traffic
+    console.warn('[rate-limit] Redis error; allowing request (fail-open):', err);
+    return { success: true };
+  }
 }
 
 /** Extract the best-effort client IP from a Next.js request. */
