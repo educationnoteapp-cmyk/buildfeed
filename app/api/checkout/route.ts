@@ -10,6 +10,7 @@
 // 5. Return the checkout URL for client-side redirect.
 
 import { NextRequest, NextResponse } from 'next/server';
+import Stripe from 'stripe';
 import { supabaseAdmin } from '@/lib/supabase';
 import { getCreatorStripe } from '@/lib/stripe';
 import type { CheckoutPayload, CheckoutMetadata } from '@/types';
@@ -75,9 +76,11 @@ export async function POST(req: NextRequest) {
     // Build the success/cancel URLs relative to the request origin
     const origin = req.headers.get('origin') || req.nextUrl.origin;
 
+    // Cast CheckoutMetadata to Stripe.MetadataParam (both are string-value records)
+    const stripeMetadata = metadata as unknown as Stripe.MetadataParam;
+
     const session = await creatorStripe.checkout.sessions.create({
       mode: 'payment',
-      payment_method_types: ['card'],
       line_items: [
         {
           price_data: {
@@ -91,12 +94,12 @@ export async function POST(req: NextRequest) {
           quantity: 1,
         },
       ],
-      metadata,
+      metadata: stripeMetadata,
       success_url: `${origin}/${creator.slug}?bid=success`,
       cancel_url: `${origin}/${creator.slug}?bid=cancelled`,
-      // Expand payment_intent so we get the ID in the webhook
+      // Attach metadata to payment_intent so the webhook can finalize the bid
       payment_intent_data: {
-        metadata,
+        metadata: stripeMetadata,
       },
     });
 

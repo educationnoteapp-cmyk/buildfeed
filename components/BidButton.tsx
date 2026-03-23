@@ -149,12 +149,8 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
           onClick={() => setIsOpen(true)}
           disabled={disabled}
           className="w-full py-5 rounded-2xl font-extrabold text-lg text-white relative overflow-hidden
-                     bg-gradient-to-r from-primary via-secondary to-primary bg-[length:200%_100%]
+                     bg-gradient-to-r from-primary to-secondary
                      disabled:opacity-50 disabled:cursor-not-allowed"
-          animate={{
-            backgroundPosition: ['0% 0%', '100% 0%', '0% 0%'],
-          }}
-          transition={{ duration: 4, repeat: Infinity, ease: 'linear' }}
           whileHover={{
             scale: 1.02,
             boxShadow: '0 0 40px rgba(79,70,229,0.4), 0 0 80px rgba(124,58,237,0.2)',
@@ -164,7 +160,7 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
           <span className="relative z-10">
             Claim Your Spot — from ${minimumBidDollars}
           </span>
-          {/* Shimmer sweep */}
+          {/* Shimmer sweep — GPU-accelerated via transform: translateX */}
           <motion.div
             className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
             animate={{ x: ['-100%', '200%'] }}
@@ -314,7 +310,7 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
             <motion.button
               onClick={handleSubmit}
               disabled={loading || disabled}
-              className="w-full py-4 rounded-xl font-extrabold text-white relative overflow-hidden
+              className="w-full py-4 min-h-[56px] rounded-xl font-extrabold text-white relative overflow-hidden
                          bg-gradient-to-r from-primary to-secondary
                          disabled:opacity-50 disabled:cursor-not-allowed text-base"
               whileHover={{

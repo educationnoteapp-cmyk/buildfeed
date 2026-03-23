@@ -8,6 +8,7 @@
 // slide displacement. Screen flash on every new bid event.
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence, useAnimation } from 'framer-motion';
 import type { Bid } from '@/types';
 
@@ -300,7 +301,13 @@ function SpotCard({ bid, rank, prevBidId }: { bid: Bid | null; rank: 1 | 2 | 3; 
           transition={{ type: 'spring', stiffness: 300 }}
         >
           {bid?.fan_avatar_url ? (
-            <img src={bid.fan_avatar_url} alt={bid.fan_handle} className="w-full h-full object-cover" />
+            <Image
+              src={bid.fan_avatar_url}
+              alt={bid.fan_handle}
+              fill
+              sizes="80px"
+              className="object-cover"
+            />
           ) : (
             <div className={`w-full h-full flex items-center justify-center text-muted ${isKing ? 'text-2xl' : 'text-lg'} font-bold`}>
               {bid ? bid.fan_handle.charAt(0).toUpperCase() : '?'}
@@ -417,12 +424,18 @@ export default function Podium({ spots, onBid }: PodiumProps) {
 
   const currentKingId = spots[0]?.id ?? null;
 
-  useEffect(() => {
-    const prevIds = prevBidIdsRef.current;
-    // Any change in the top 3 triggers a screen flash
-    const changed = spots.slice(0, 3).some((s, i) => (s?.id ?? null) !== prevIds[i]);
+  // Previous spot IDs passed to children so SpotCard can detect outbid & shake.
+  // Must be state (not just a ref) so children re-render with the old values.
+  const [prevSpotIds, setPrevSpotIds] = useState<(string | null)[]>([null, null, null]);
 
-    if (changed && prevIds.some(id => id !== null)) {
+  useEffect(() => {
+    const prevRefIds = prevBidIdsRef.current;
+    // Any change in the top 3 triggers a screen flash
+    const changed = spots.slice(0, 3).some((s, i) => (s?.id ?? null) !== prevRefIds[i]);
+
+    if (changed && prevRefIds.some(id => id !== null)) {
+      // Snapshot OLD ids for children BEFORE updating the ref — enables shake animation
+      setPrevSpotIds([...prevRefIds]);
       setShowFlash(true);
       setTimeout(() => setShowFlash(false), 700);
     }
@@ -437,9 +450,6 @@ export default function Podium({ spots, onBid }: PodiumProps) {
   }, [spots, currentKingId]);
 
   const handleConfettiDone = useCallback(() => setShowConfetti(false), []);
-
-  // Snapshot previous IDs for outbid detection in children
-  const [prevIds] = useState<(string | null)[]>(() => [null, null, null]);
 
   return (
     <div className="relative w-full max-w-lg mx-auto px-4 pt-14 pb-4">
@@ -461,9 +471,9 @@ export default function Podium({ spots, onBid }: PodiumProps) {
 
       {/* 3-column podium: Runner-up | King | Jester */}
       <div className="flex items-end justify-center gap-3">
-        <SpotCard bid={spots[1] ?? null} rank={2} prevBidId={prevIds[1]} />
-        <SpotCard bid={spots[0] ?? null} rank={1} prevBidId={prevIds[0]} />
-        <SpotCard bid={spots[2] ?? null} rank={3} prevBidId={prevIds[2]} />
+        <SpotCard bid={spots[1] ?? null} rank={2} prevBidId={prevSpotIds[1]} />
+        <SpotCard bid={spots[0] ?? null} rank={1} prevBidId={prevSpotIds[0]} />
+        <SpotCard bid={spots[2] ?? null} rank={3} prevBidId={prevSpotIds[2]} />
       </div>
     </div>
   );

@@ -178,18 +178,16 @@ export default function AdminPage() {
   }, [ready, loadData]);
 
   // ── Optimistic plan change handler (passed to PlanActions) ───────────────
+  // Keep setCreators and setStats as separate calls — calling setState inside
+  // another setState updater is a React anti-pattern that causes double-fires
+  // in Strict Mode and leads to incorrect foundingCount.
   const handlePlanChange = useCallback((creatorId: string, newPlan: string) => {
     setCreators((prev) => {
-      const old = prev.find((c) => c.id === creatorId);
-      const wasFounder = old?.plan_type === 'founding';
-      const isFounder  = newPlan === 'founding';
-
-      setStats((s) => ({
-        ...s,
-        foundingCount: s.foundingCount + (isFounder ? 1 : 0) - (wasFounder ? 1 : 0),
-      }));
-
-      return prev.map((c) => c.id === creatorId ? { ...c, plan_type: newPlan } : c);
+      const updated = prev.map((c) => c.id === creatorId ? { ...c, plan_type: newPlan } : c);
+      // Derive foundingCount directly from the new array — idempotent & safe
+      const newFoundingCount = updated.filter((c) => c.plan_type === 'founding').length;
+      setStats((s) => ({ ...s, foundingCount: newFoundingCount }));
+      return updated;
     });
   }, []);
 

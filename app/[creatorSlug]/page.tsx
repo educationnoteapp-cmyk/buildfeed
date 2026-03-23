@@ -18,10 +18,10 @@ export default async function CreatorPodiumPage({ params }: Props) {
 
   if (!creator) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center px-4">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-text-main mb-2">Creator not found</h1>
-          <p className="text-muted">No podium exists for &ldquo;{creatorSlug}&rdquo;</p>
+          <h1 className="text-2xl font-bold text-white mb-2">Creator not found</h1>
+          <p className="text-slate-400">No podium exists for &ldquo;{creatorSlug}&rdquo;</p>
         </div>
       </div>
     );

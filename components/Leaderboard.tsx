@@ -8,6 +8,7 @@
 // Amount changes show smooth count-up animation.
 
 import { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence, useAnimation } from 'framer-motion';
 import type { Bid } from '@/types';
 
@@ -50,13 +51,9 @@ function LeaderboardRow({ bid, rank, isNew }: { bid: Bid | null; rank: number; i
   // Flash + shake when this row gets a new occupant
   useEffect(() => {
     if (isNew && bid) {
+      // Only animate transform (x) — GPU-accelerated. backgroundColor removed (non-GPU).
       shakeControls.start({
         x: [0, -4, 4, -3, 3, -1, 1, 0],
-        backgroundColor: [
-          'rgba(79,70,229,0.15)',
-          'rgba(79,70,229,0.05)',
-          'rgba(19,19,26,0.6)',
-        ],
         transition: { duration: 0.5 },
       });
     }
@@ -100,11 +97,17 @@ function LeaderboardRow({ bid, rank, isNew }: { bid: Bid | null; rank: number; i
 
       {/* Avatar */}
       <motion.div
-        className="flex-shrink-0 w-9 h-9 rounded-full overflow-hidden bg-background border border-border"
+        className="flex-shrink-0 w-9 h-9 rounded-full overflow-hidden bg-background border border-border relative"
         whileHover={{ scale: 1.1, borderColor: '#4F46E5' }}
       >
         {bid?.fan_avatar_url ? (
-          <img src={bid.fan_avatar_url} alt={bid.fan_handle} className="w-full h-full object-cover" />
+          <Image
+            src={bid.fan_avatar_url}
+            alt={bid.fan_handle}
+            fill
+            sizes="36px"
+            className="object-cover"
+          />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-muted text-sm font-bold">
             {bid ? bid.fan_handle.charAt(0).toUpperCase() : '?'}

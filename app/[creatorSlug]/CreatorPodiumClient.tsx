@@ -82,12 +82,12 @@ export default function CreatorPodiumClient({ creator, initialBids }: Props) {
 
       {/* Creator Header */}
       <motion.div
-        className="pt-10 pb-6 text-center relative z-10"
+        className="pt-10 pb-6 text-center relative z-10 px-4"
         initial={{ opacity: 0, y: -16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
       >
-        <h1 className="text-3xl font-extrabold text-text-main tracking-tight">
+        <h1 className="text-2xl sm:text-3xl font-extrabold text-text-main tracking-tight break-words">
           {creator.slug}&apos;s
           <span className="bg-gradient-to-r from-yellow-400 via-primary to-secondary bg-clip-text text-transparent ml-2">
             Ego Podium

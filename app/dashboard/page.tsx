@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence, useMotionValue, useSpring, animate as fmAnimate } from 'framer-motion';
 import { createClient } from '@/lib/supabase/client';
 import { getSession, signOut } from '@/lib/auth';
@@ -347,11 +348,15 @@ export default function DashboardPage() {
           {user && (
             <div className="flex items-center gap-3">
               {user.user_metadata?.avatar_url ? (
-                <img
-                  src={user.user_metadata.avatar_url}
-                  alt={user.email ?? 'avatar'}
-                  className="w-8 h-8 rounded-full border border-slate-700 object-cover flex-shrink-0"
-                />
+                <div className="relative w-8 h-8 flex-shrink-0">
+                  <Image
+                    src={user.user_metadata.avatar_url}
+                    alt={user.email ?? 'avatar'}
+                    fill
+                    sizes="32px"
+                    className="rounded-full object-cover border border-slate-700"
+                  />
+                </div>
               ) : (
                 <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center
                                text-white text-xs font-bold flex-shrink-0">
@@ -499,7 +504,7 @@ export default function DashboardPage() {
             <motion.button
               onClick={handleSaveSlug}
               disabled={savingSlug || !creator}
-              className="px-5 py-2.5 rounded-xl font-semibold text-sm text-white
+              className="px-5 py-2.5 min-h-[56px] rounded-xl font-semibold text-sm text-white
                          bg-indigo-600 hover:bg-indigo-500
                          disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               whileHover={{ scale: 1.02 }}
@@ -617,7 +622,7 @@ export default function DashboardPage() {
             <motion.button
               onClick={handleSaveStripe}
               disabled={savingStripe || !creator}
-              className="px-5 py-2.5 rounded-xl font-semibold text-sm text-white
+              className="px-5 py-2.5 min-h-[56px] rounded-xl font-semibold text-sm text-white
                          bg-indigo-600 hover:bg-indigo-500
                          disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               whileHover={{ scale: 1.02 }}
@@ -665,7 +670,7 @@ export default function DashboardPage() {
               <motion.button
                 onClick={handleSeed}
                 disabled={seeding || !creator || analytics.totalBids > 0}
-                className="w-full py-3 rounded-xl font-semibold text-sm
+                className="w-full py-3 min-h-[56px] rounded-xl font-semibold text-sm
                            bg-slate-950 border border-slate-700 text-slate-200
                            hover:border-green-500/40 hover:shadow-[0_0_16px_rgba(34,197,94,0.1)]
                            disabled:opacity-40 disabled:cursor-not-allowed transition-all"
@@ -697,7 +702,7 @@ export default function DashboardPage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={!savedSlug ? (e) => e.preventDefault() : undefined}
-                className={`flex items-center justify-center gap-2 w-full py-3 rounded-xl
+                className={`flex items-center justify-center gap-2 w-full py-3 min-h-[56px] rounded-xl
                            font-semibold text-sm border transition-all
                            ${savedSlug
                              ? 'bg-slate-950 border-indigo-700/50 text-indigo-300 hover:border-indigo-500 hover:shadow-[0_0_16px_rgba(99,102,241,0.15)] cursor-pointer'
@@ -765,7 +770,7 @@ export default function DashboardPage() {
 
             {plan.showUpgrade && (
               <motion.button
-                className="px-5 py-2.5 rounded-xl font-semibold text-sm text-white
+                className="px-5 py-2.5 min-h-[56px] rounded-xl font-semibold text-sm text-white
                            bg-gradient-to-r from-purple-600 to-indigo-600
                            hover:shadow-[0_0_20px_rgba(139,92,246,0.3)] transition-all flex-shrink-0"
                 whileHover={{ scale: 1.03 }}

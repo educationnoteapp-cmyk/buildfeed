@@ -4,7 +4,7 @@ import Stripe from 'stripe';
 // For per-creator charges, instantiate a new Stripe client with the
 // creator's own stripe_secret_key (stored in the `creators` table).
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-02-24.acacia',
+  apiVersion: '2026-02-25.clover',
 });
 
 /**
@@ -13,6 +13,6 @@ export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
  */
 export function getCreatorStripe(creatorSecretKey: string): Stripe {
   return new Stripe(creatorSecretKey, {
-    apiVersion: '2025-02-24.acacia',
+    apiVersion: '2026-02-25.clover',
   });
 }
