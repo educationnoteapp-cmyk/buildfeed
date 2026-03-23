@@ -3,31 +3,42 @@
 // STRIPE CONNECT FLOW (payment_intent.succeeded):
 // 1. Verify the webhook signature using the PLATFORM webhook secret
 //    (STRIPE_WEBHOOK_SECRET env var) — one secret for all creators.
-// 2. Extract creator_id from payment_intent metadata.
-// 3. Insert a row into `bids` (the immutable financial ledger).
-// 4. Re-rank the top 10 bids by amount_paid for this creator.
-// 5. Rebuild `podium_spots` from the new top 10.
+// 2. Log the event with a timestamp.
+// 3. Extract creator_id from payment_intent metadata.
+// 4. Idempotency: if stripe_payment_intent_id already exists in bids → 200 immediately.
+// 5. Insert a row into `bids` (the immutable financial ledger).
+// 6. Re-rank the top 10 bids by amount_paid for this creator.
+// 7. Rebuild `podium_spots` from the new top 10.
 //    Fans outside top 10 are displaced — bids row stays, no refund.
-// 6. Return 200 to Stripe immediately.
+// 8. Return 200 to Stripe immediately.
 
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { supabaseAdmin } from '@/lib/supabase';
 import { stripe } from '@/lib/stripe';
+import { env } from '@/lib/env';
 import type { CheckoutMetadata } from '@/types';
+
+// Validate env at import time
+void env;
+
+function ts(): string {
+  return new Date().toISOString();
+}
 
 export async function POST(req: NextRequest) {
   const body = await req.text();
   const sig  = req.headers.get('stripe-signature');
 
   if (!sig) {
+    console.error(`[${ts()}] Webhook: missing stripe-signature header`);
     return NextResponse.json({ error: 'Missing stripe-signature header' }, { status: 400 });
   }
 
   // --- Verify signature with the platform webhook secret ---
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    console.error('STRIPE_WEBHOOK_SECRET is not configured');
+    console.error(`[${ts()}] Webhook: STRIPE_WEBHOOK_SECRET is not configured`);
     return NextResponse.json({ error: 'Webhook secret not configured' }, { status: 500 });
   }
 
@@ -35,9 +46,12 @@ export async function POST(req: NextRequest) {
   try {
     event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
   } catch (err) {
-    console.error('Webhook signature verification failed:', err);
+    console.error(`[${ts()}] Webhook: signature verification failed:`, err);
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
   }
+
+  // Log every received event with a timestamp
+  console.log(`[${ts()}] Webhook received: ${event.type} | id=${event.id}`);
 
   // Only handle payment_intent.succeeded
   if (event.type !== 'payment_intent.succeeded') {
@@ -48,6 +62,7 @@ export async function POST(req: NextRequest) {
   const metadata       = paymentIntent.metadata as unknown as CheckoutMetadata;
 
   if (!metadata?.creator_id) {
+    console.error(`[${ts()}] Webhook: missing creator_id in metadata for ${paymentIntent.id}`);
     return NextResponse.json({ error: 'Missing creator_id in metadata' }, { status: 400 });
   }
 
@@ -58,25 +73,39 @@ export async function POST(req: NextRequest) {
   const creatorId       = metadata.creator_id;
   const paymentIntentId = paymentIntent.id;
 
+  // --- Idempotency: explicit pre-check before insert ---
+  // The unique constraint on stripe_payment_intent_id also catches duplicates,
+  // but this avoids a wasted insert attempt on known retries.
+  const { data: existingBid } = await supabaseAdmin
+    .from('bids')
+    .select('id')
+    .eq('stripe_payment_intent_id', paymentIntentId)
+    .maybeSingle();
+
+  if (existingBid) {
+    console.log(`[${ts()}] Webhook: duplicate payment intent ignored (Stripe retry): ${paymentIntentId}`);
+    return NextResponse.json({ received: true });
+  }
+
   // --- Insert into bids table (permanent financial ledger) ---
   const { error: bidInsertError } = await supabaseAdmin
     .from('bids')
     .insert({
-      creator_id:              creatorId,
-      fan_handle:              fanHandle,
-      fan_avatar_url:          fanAvatarUrl,
+      creator_id:               creatorId,
+      fan_handle:               fanHandle,
+      fan_avatar_url:           fanAvatarUrl,
       message,
-      amount_paid:             amountCents,
+      amount_paid:              amountCents,
       stripe_payment_intent_id: paymentIntentId,
     });
 
   if (bidInsertError) {
-    // Duplicate payment_intent_id means Stripe is retrying — safe to ignore
+    // Race condition: another webhook delivery inserted first — safe to ignore
     if (bidInsertError.code === '23505') {
-      console.log('Duplicate bid ignored (Stripe retry):', paymentIntentId);
+      console.log(`[${ts()}] Webhook: duplicate bid ignored (race condition): ${paymentIntentId}`);
       return NextResponse.json({ received: true });
     }
-    console.error('Failed to insert bid:', bidInsertError);
+    console.error(`[${ts()}] Webhook: failed to insert bid:`, bidInsertError);
     return NextResponse.json({ error: 'Failed to record bid' }, { status: 500 });
   }
 
@@ -89,7 +118,7 @@ export async function POST(req: NextRequest) {
     .limit(10);
 
   if (fetchError || !topBids) {
-    console.error('Failed to fetch top bids:', fetchError);
+    console.error(`[${ts()}] Webhook: failed to fetch top bids:`, fetchError);
     return NextResponse.json({ error: 'Failed to re-rank' }, { status: 500 });
   }
 
@@ -100,7 +129,7 @@ export async function POST(req: NextRequest) {
     .eq('creator_id', creatorId);
 
   if (deleteError) {
-    console.error('Failed to clear podium_spots:', deleteError);
+    console.error(`[${ts()}] Webhook: failed to clear podium_spots:`, deleteError);
     return NextResponse.json({ error: 'Failed to update podium' }, { status: 500 });
   }
 
@@ -120,13 +149,14 @@ export async function POST(req: NextRequest) {
       .insert(podiumRows);
 
     if (insertError) {
-      console.error('Failed to insert podium_spots:', insertError);
+      console.error(`[${ts()}] Webhook: failed to insert podium_spots:`, insertError);
       return NextResponse.json({ error: 'Failed to update podium' }, { status: 500 });
     }
   }
 
   console.log(
-    `Bid processed: ${fanHandle} paid $${(amountCents / 100).toFixed(2)} on creator ${creatorId}`
+    `[${ts()}] Webhook: bid processed — ${fanHandle} paid $${(amountCents / 100).toFixed(2)} ` +
+    `on creator=${creatorId} pi=${paymentIntentId}`
   );
 
   return NextResponse.json({ received: true });

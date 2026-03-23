@@ -36,6 +36,8 @@ export default function BidAction({
   currentSpot10Amount,
   creatorSlug,
 }: BidActionProps) {
+  const MAXIMUM_BID_DOLLARS = 50; // $50 launch cap
+
   const [fanHandle, setFanHandle] = useState("");
   const [message, setMessage] = useState("");
   const [amountDollars, setAmountDollars] = useState("");
@@ -70,6 +72,10 @@ export default function BidAction({
     }
     if (amountCents < minimumCents) {
       setError(`Minimum bid is $${minimumDollars}`);
+      return;
+    }
+    if (amountCents > MAXIMUM_BID_DOLLARS * 100) {
+      setError(`Maximum bid is $${MAXIMUM_BID_DOLLARS} during launch`);
       return;
     }
 
@@ -162,6 +168,7 @@ export default function BidAction({
           <span className="text-slate-500">
             Minimum entry:{" "}
             <span className="text-slate-200 font-bold">${minimumDollars}</span>
+            <span className="opacity-50 ml-1">· max ${MAXIMUM_BID_DOLLARS}</span>
           </span>
           <span className="text-slate-500">
             Steal crown:{" "}
@@ -231,6 +238,7 @@ export default function BidAction({
               onChange={(e) => setAmountDollars(e.target.value)}
               placeholder={String(minimumDollars)}
               min={minimumDollars}
+              max={MAXIMUM_BID_DOLLARS}
               step="1"
               className={
                 "w-full bg-slate-950 border rounded-xl pl-10 pr-4 py-4 text-slate-100 " +

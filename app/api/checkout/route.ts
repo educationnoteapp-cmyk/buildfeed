@@ -3,7 +3,7 @@
 // STRIPE CONNECT FLOW:
 // 1. Receive { creatorSlug, fanHandle, message, amountCents } from the client.
 // 2. Fetch the creator's stripe_account_id from Supabase.
-// 3. Validate bid amount meets the minimum.
+// 3. Validate bid amount meets the minimum and does not exceed the $50 launch cap.
 // 4. Create a Checkout Session using the PLATFORM key with stripeAccount set to
 //    the creator's connected account so the payment lands directly in their Stripe.
 // 5. Apply platform application fee based on plan_type:
@@ -12,22 +12,67 @@
 // 6. Return the checkout URL for client-side redirect.
 
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import Stripe from 'stripe';
 import { supabaseAdmin } from '@/lib/supabase';
 import { stripe } from '@/lib/stripe';
-import type { CheckoutPayload, CheckoutMetadata } from '@/types';
+import { rateLimit, getClientIp } from '@/lib/rate-limit';
+import { env } from '@/lib/env';
+import type { CheckoutMetadata } from '@/types';
 
-const ABSOLUTE_MINIMUM_CENTS = 500; // $5
-const PLATFORM_FEE_PERCENT   = 0.15; // 15% for non-founding/non-trial plans
+// Validate env at import time — throws clearly if anything is missing
+void env;
+
+const ABSOLUTE_MINIMUM_CENTS = 500;  // $5
+const MAXIMUM_BID_CENTS       = 5000; // $50 launch cap
+const PLATFORM_FEE_PERCENT    = 0.15; // 15% for non-founding/non-trial plans
+
+// ── Zod schema ───────────────────────────────────────────────────────────────
+// noHtml: reject strings containing < or > to block HTML/script injection
+const noHtml = z.string().regex(/^[^<>]*$/, 'HTML tags are not allowed');
+
+const CheckoutSchema = z.object({
+  creatorSlug:  z.string().min(1).max(50).regex(/^[a-z0-9-]+$/, 'Invalid slug format'),
+  fanHandle:    noHtml.min(1).max(30),
+  message:      noHtml.max(100).optional(),
+  amountCents:  z
+    .number({ invalid_type_error: 'amountCents must be a number' })
+    .int('amountCents must be a whole number')
+    .min(ABSOLUTE_MINIMUM_CENTS, `Minimum bid is $${ABSOLUTE_MINIMUM_CENTS / 100}`)
+    .max(MAXIMUM_BID_CENTS,       `Maximum bid is $${MAXIMUM_BID_CENTS / 100} during launch`),
+  fanAvatarUrl: z.string().optional(),
+});
 
 export async function POST(req: NextRequest) {
-  try {
-    const body: CheckoutPayload = await req.json();
-    const { creatorSlug, fanHandle, message, amountCents, fanAvatarUrl } = body;
+  // ── Rate limit: 5 requests per IP per minute ─────────────────────────────
+  const ip = getClientIp(req.headers);
+  const rl = rateLimit(`checkout:${ip}`, 5, 60_000);
+  if (!rl.success) {
+    return NextResponse.json(
+      { error: 'Too many requests. Please try again later.' },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
+    );
+  }
 
-    if (!creatorSlug || !fanHandle || !amountCents) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+  try {
+    // ── Zod validation ──────────────────────────────────────────────────────
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
+
+    const parsed = CheckoutSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      const firstError = parsed.error.errors[0];
+      return NextResponse.json(
+        { error: firstError?.message ?? 'Invalid request' },
+        { status: 400 }
+      );
+    }
+
+    const { creatorSlug, fanHandle, message, amountCents, fanAvatarUrl } = parsed.data;
 
     // --- Fetch creator ---
     const { data: creator, error: creatorError } = await supabaseAdmin
@@ -80,15 +125,15 @@ export async function POST(req: NextRequest) {
 
     // --- Build metadata ---
     const metadata: CheckoutMetadata = {
-      creator_id:    creator.id,
-      fan_handle:    fanHandle,
-      fan_avatar_url: fanAvatarUrl || '',
-      message:       message || '',
-      amount_cents:  String(amountCents),
+      creator_id:     creator.id,
+      fan_handle:     fanHandle,
+      fan_avatar_url: fanAvatarUrl ?? '',
+      message:        message      ?? '',
+      amount_cents:   String(amountCents),
     };
     const stripeMetadata = metadata as unknown as Stripe.MetadataParam;
 
-    const origin = req.headers.get('origin') || req.nextUrl.origin;
+    const origin = req.headers.get('origin') ?? req.nextUrl.origin;
 
     // --- Create Stripe Checkout Session via Connect ---
     // The platform key is used but payment lands in the creator's connected account.
@@ -97,7 +142,7 @@ export async function POST(req: NextRequest) {
       line_items: [
         {
           price_data: {
-            currency: 'usd',
+            currency:    'usd',
             unit_amount: amountCents,
             product_data: {
               name:        `Podium Bid — ${creator.slug}`,
@@ -107,25 +152,21 @@ export async function POST(req: NextRequest) {
           quantity: 1,
         },
       ],
-      metadata: stripeMetadata,
+      metadata:    stripeMetadata,
       success_url: `${origin}/${creator.slug}?bid=success`,
       cancel_url:  `${origin}/${creator.slug}?bid=cancelled`,
       payment_intent_data: {
-        metadata:        stripeMetadata,
+        metadata: stripeMetadata,
         // Route payment to the creator's connected account
-        transfer_data: {
-          destination: creator.stripe_account_id,
-        },
+        transfer_data: { destination: creator.stripe_account_id },
         // Collect platform fee (0 for founding/trial creators)
-        ...(applicationFeeAmount > 0 && {
-          application_fee_amount: applicationFeeAmount,
-        }),
+        ...(applicationFeeAmount > 0 && { application_fee_amount: applicationFeeAmount }),
       },
     };
 
     const session = await stripe.checkout.sessions.create(sessionParams);
-
     return NextResponse.json({ url: session.url });
+
   } catch (error) {
     console.error('Checkout error:', error);
     return NextResponse.json(

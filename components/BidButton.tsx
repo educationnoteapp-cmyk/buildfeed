@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { Bid, ModerationResult } from '@/types';
 
 const ABSOLUTE_MINIMUM_CENTS = 500;
+const MAXIMUM_BID_DOLLARS    = 50; // $50 launch cap
 
 interface BidButtonProps {
   creatorSlug: string;
@@ -100,6 +101,7 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
 
     if (!fanHandle.trim()) { setError('Enter your handle'); return; }
     if (isNaN(cents) || cents < minimumBidCents) { setError(`Minimum bid is $${minimumBidDollars}`); return; }
+    if (cents > MAXIMUM_BID_DOLLARS * 100) { setError(`Maximum bid is $${MAXIMUM_BID_DOLLARS} during launch`); return; }
 
     setLoading(true);
     try {
@@ -207,6 +209,9 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
               <span className="text-xs text-muted ml-1.5">
                 {currentSpots.filter(Boolean).length >= 10 ? '(outbid #10 + $1)' : '(open spots available)'}
               </span>
+              <span className="text-xs text-muted ml-2 opacity-60">
+                · max ${MAXIMUM_BID_DOLLARS} during launch
+              </span>
             </div>
 
             {/* Handle */}
@@ -250,6 +255,7 @@ export default function BidButton({ creatorSlug, currentSpots, disabled = false 
                   onChange={(e) => handleAmountChange(e.target.value)}
                   placeholder={minimumBidDollars}
                   min={parseInt(minimumBidDollars)}
+                  max={MAXIMUM_BID_DOLLARS}
                   step="1"
                   className="w-full bg-background border border-border rounded-xl pl-10 pr-4 py-4
                              text-text-main text-2xl font-extrabold

@@ -16,12 +16,30 @@ import { NextRequest, NextResponse } from 'next/server';
 import { stripe } from '@/lib/stripe';
 import { createClient } from '@/lib/supabase/server';
 import { supabaseAdmin } from '@/lib/supabase';
+import { rateLimit, getClientIp } from '@/lib/rate-limit';
+import { env } from '@/lib/env';
+
+// Validate env at import time
+void env;
 
 const STRIPE_CLIENT_ID      = process.env.STRIPE_CLIENT_ID!;
 const STRIPE_CONNECT_SCOPES = 'read_write';
+
+// Validation patterns
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Stripe OAuth authorization codes always begin with "ac_"
+const STRIPE_CODE_RE = /^ac_[a-zA-Z0-9]+$/;
 
 export async function GET(req: NextRequest) {
+  // ── Rate limit: 3 requests per IP per minute ─────────────────────────────
+  const ip = getClientIp(req.headers);
+  const rl = rateLimit(`stripe-connect:${ip}`, 3, 60_000);
+  if (!rl.success) {
+    return NextResponse.redirect(
+      `${req.nextUrl.origin}/dashboard?stripe_connect=error&reason=too_many_requests`
+    );
+  }
+
   const { searchParams, origin } = req.nextUrl;
   const code  = searchParams.get('code');
   const state = searchParams.get('state');   // creator_id passed as OAuth state
@@ -29,6 +47,13 @@ export async function GET(req: NextRequest) {
 
   // ── Step 4+5: OAuth callback — exchange code for account ID ──────────────
   if (code && state) {
+    // Validate code format: Stripe auth codes always start with "ac_"
+    if (!STRIPE_CODE_RE.test(code)) {
+      return NextResponse.redirect(
+        `${origin}/dashboard?stripe_connect=error&reason=invalid_code`
+      );
+    }
+
     // CSRF protection: validate state is a well-formed UUID before any DB query
     if (!UUID_RE.test(state)) {
       return NextResponse.redirect(
