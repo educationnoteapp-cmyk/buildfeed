@@ -1,20 +1,12 @@
 "use client";
 
-// PodiumBoard.tsx — Main leaderboard with spring-physics positions + dopamine ceremonies.
+// PodiumBoard.tsx
 //
-// Animation 4 — Crowning Ceremony:
-//   When bids[0].id changes (new King), a bg-black/85 overlay drops over the
-//   entire screen for 1.5 s. The KingSpot sits at z-[100] ABOVE the overlay,
-//   acting as a spotlight. Its glow intensifies during this window.
-//
-// Animation 5 — Confetti Explosion:
-//   Fires simultaneously with the overlay. 180 gold/white particles burst
-//   outward from the center, slow via decay, and fade via opacity animation.
-//   Unmounts itself after 3 s.
-//
-// Animation 6 — Rolling Numbers:
-//   All amounts (King, Runner-up, Jester, rows 4–10) use <RollingNumber>
-//   so every dollar figure counts up smoothly on every change.
+// Animation 4 — Crowning Ceremony (screen dim + spotlight)
+// Animation 5 — Confetti Explosion (tsParticles)
+// Animation 6 — Rolling Numbers (RollingNumber)
+// Animation 7 — Violent exit: instant red bg + x-shake
+// Animation 8 — Drop obliteration: rotateZ + y-drop + scale + fade
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence, LayoutGroup } from "framer-motion";
@@ -24,7 +16,6 @@ import type { Engine, ISourceOptions } from "@tsparticles/engine";
 import KingSpot from "./KingSpot";
 import RollingNumber from "./RollingNumber";
 
-// ---- Types ----
 interface Bid {
   id: string;
   fanHandle: string;
@@ -39,15 +30,63 @@ interface PodiumBoardProps {
 
 const SPRING = { type: "spring" as const, stiffness: 350, damping: 28 };
 
-// ---- Confetti explosion (Animation 5) ----
-// Mounts a full-screen tsParticles canvas at z-[200] for 3 seconds.
+// ─────────────────────────────────────────────────────────────
+// Animation 7 & 8 — Violent exit for leaderboard rows (#4–10)
+// Phase 1 (0–0.35s): instant red bg + x-axis shake
+// Phase 2 (0.35–0.65s): rotateZ + drop (y) + scale + fade
+// ─────────────────────────────────────────────────────────────
+const ROW_EXIT_VARIANTS = {
+  exit: {
+    // Phase 1: shake
+    x: [0, -10, 10, -15, 15, -5, 5, 0],
+    // Phase 2: drop
+    rotateZ: -10,
+    y: 150,
+    scale: 0.5,
+    opacity: 0,
+    // Instant red
+    backgroundColor: "rgba(127, 29, 29, 0.8)",
+    transition: {
+      x: { duration: 0.35, ease: "linear" as const },
+      backgroundColor: { duration: 0.06, ease: "easeOut" as const },
+      rotateZ: { duration: 0.30, delay: 0.35, ease: "easeIn" as const },
+      y: { duration: 0.30, delay: 0.35, ease: "easeIn" as const },
+      scale: { duration: 0.30, delay: 0.35, ease: "easeIn" as const },
+      opacity: { duration: 0.30, delay: 0.35, ease: "easeIn" as const },
+    },
+  },
+};
+
+// Podium card exit (Runner-up, Jester) — shake + drop, no bg change
+const CARD_EXIT_VARIANTS = {
+  exit: {
+    x: [0, -10, 10, -15, 15, -5, 5, 0],
+    rotateZ: -12,
+    y: 200,
+    scale: 0.45,
+    opacity: 0,
+    transition: {
+      x: { duration: 0.35, ease: "linear" as const },
+      rotateZ: { duration: 0.30, delay: 0.35, ease: "easeIn" as const },
+      y: { duration: 0.30, delay: 0.35, ease: "easeIn" as const },
+      scale: { duration: 0.30, delay: 0.35, ease: "easeIn" as const },
+      opacity: { duration: 0.25, delay: 0.40, ease: "easeIn" as const },
+    },
+  },
+};
+
+// ─────────────────────────────────────────────────────────────
+// Animation 5 — Crown confetti (tsParticles one-shot burst)
+// ─────────────────────────────────────────────────────────────
 const CONFETTI_OPTIONS: ISourceOptions = {
   fullScreen: { enable: false },
   fpsLimit: 60,
   background: { color: { value: "transparent" } },
   particles: {
     number: { value: 180, density: { enable: false } },
-    color: { value: ["#FFD700", "#FFA500", "#FF8C00", "#FFFFFF", "#FFF8DC", "#7C3AED", "#EC4899"] },
+    color: {
+      value: ["#FFD700", "#FFA500", "#FF8C00", "#FFFFFF", "#FFF8DC", "#7C3AED", "#EC4899"],
+    },
     shape: { type: "circle" },
     opacity: {
       value: { min: 0, max: 1 },
@@ -55,7 +94,6 @@ const CONFETTI_OPTIONS: ISourceOptions = {
         enable: true,
         speed: 1.2,
         sync: false,
-        // Particles fade from full opacity down to 0 then self-destruct
         startValue: "max" as "max",
         destroy: "min" as "min",
       },
@@ -68,7 +106,7 @@ const CONFETTI_OPTIONS: ISourceOptions = {
       random: true,
       straight: false,
       outModes: { default: "destroy" as const },
-      decay: 0.04, // gradual natural deceleration
+      decay: 0.04,
     },
   },
   detectRetina: true,
@@ -78,12 +116,10 @@ function CrownConfetti({ onDone }: { onDone: () => void }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Engine is likely already initialized by BackgroundArena; this is idempotent
     initParticlesEngine(async (engine: Engine) => {
       await loadSlim(engine);
     }).then(() => setReady(true));
 
-    // Auto-dismiss after 3 s
     const t = setTimeout(onDone, 3000);
     return () => clearTimeout(t);
   }, [onDone]);
@@ -99,7 +135,9 @@ function CrownConfetti({ onDone }: { onDone: () => void }) {
   );
 }
 
-// ---- Avatar with initials fallback ----
+// ─────────────────────────────────────────────────────────────
+// Avatar with initials fallback
+// ─────────────────────────────────────────────────────────────
 function AvatarOrInitial({
   url,
   handle,
@@ -114,11 +152,7 @@ function AvatarOrInitial({
 
   if (url) {
     return (
-      <img
-        src={url}
-        alt={handle}
-        className={`${dim} rounded-full object-cover flex-shrink-0`}
-      />
+      <img src={url} alt={handle} className={`${dim} rounded-full object-cover flex-shrink-0`} />
     );
   }
   return (
@@ -130,10 +164,19 @@ function AvatarOrInitial({
   );
 }
 
-// ---- Runner-up (#2) ----
+// ─────────────────────────────────────────────────────────────
+// Runner-up (#2) — violent exit via CARD_EXIT_VARIANTS
+// ─────────────────────────────────────────────────────────────
 function RunnerUpCard({ bid }: { bid: Bid }) {
   return (
-    <motion.div layout layoutId={bid.id} transition={SPRING} className="flex flex-col items-center gap-2">
+    <motion.div
+      layout
+      layoutId={bid.id}
+      transition={SPRING}
+      variants={CARD_EXIT_VARIANTS}
+      exit="exit"
+      className="flex flex-col items-center gap-2"
+    >
       <div className="relative">
         <AvatarOrInitial url={bid.fanAvatarUrl} handle={bid.fanHandle} size="md" />
         <div className="absolute inset-0 rounded-full shadow-[0_0_20px_rgba(192,192,192,0.5)] pointer-events-none" />
@@ -149,10 +192,19 @@ function RunnerUpCard({ bid }: { bid: Bid }) {
   );
 }
 
-// ---- Jester (#3) ----
+// ─────────────────────────────────────────────────────────────
+// Jester (#3) — violent exit via CARD_EXIT_VARIANTS
+// ─────────────────────────────────────────────────────────────
 function JesterCard({ bid }: { bid: Bid }) {
   return (
-    <motion.div layout layoutId={bid.id} transition={SPRING} className="flex flex-col items-center gap-2">
+    <motion.div
+      layout
+      layoutId={bid.id}
+      transition={SPRING}
+      variants={CARD_EXIT_VARIANTS}
+      exit="exit"
+      className="flex flex-col items-center gap-2"
+    >
       <div className="relative">
         <AvatarOrInitial url={bid.fanAvatarUrl} handle={bid.fanHandle} size="md" />
         <div className="absolute inset-0 rounded-full shadow-[0_0_20px_rgba(205,127,50,0.5)] pointer-events-none" />
@@ -168,16 +220,26 @@ function JesterCard({ bid }: { bid: Bid }) {
   );
 }
 
-// ---- Leaderboard row (#4–10) ----
+// ─────────────────────────────────────────────────────────────
+// Leaderboard row (#4–10) — violent exit via ROW_EXIT_VARIANTS
+// Bg color is set in `style` so Framer can animate it on exit
+// ─────────────────────────────────────────────────────────────
 function LeaderRow({ bid, rank }: { bid: Bid; rank: number }) {
   const isEven = rank % 2 === 0;
+
   return (
     <motion.div
       layout
       layoutId={bid.id}
       transition={SPRING}
-      className={`flex items-center gap-3 px-4 py-3 rounded-xl
-                  ${isEven ? "bg-slate-900" : "bg-slate-800/60"}`}
+      variants={ROW_EXIT_VARIANTS}
+      exit="exit"
+      // Background via `style` so Framer Motion can animate it to red on exit
+      style={{
+        backgroundColor: isEven ? "rgba(15, 23, 42, 1)" : "rgba(30, 41, 59, 0.6)",
+        borderRadius: "0.75rem",
+      }}
+      className="flex items-center gap-3 px-4 py-3"
     >
       <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-slate-700 flex items-center justify-center">
         <span className="text-xs font-extrabold text-slate-400">{rank}</span>
@@ -193,12 +255,17 @@ function LeaderRow({ bid, rank }: { bid: Bid; rank: number }) {
           </p>
         )}
       </div>
-      <RollingNumber value={bid.amountPaid} className="text-sm font-extrabold text-indigo-400 flex-shrink-0" />
+      <RollingNumber
+        value={bid.amountPaid}
+        className="text-sm font-extrabold text-indigo-400 flex-shrink-0"
+      />
     </motion.div>
   );
 }
 
-// ---- Empty slot ----
+// ─────────────────────────────────────────────────────────────
+// Empty slot placeholder (no exit animation needed)
+// ─────────────────────────────────────────────────────────────
 function EmptySlot({ rank }: { rank: number }) {
   return (
     <motion.div
@@ -215,24 +282,22 @@ function EmptySlot({ rank }: { rank: number }) {
   );
 }
 
-// ---- Main PodiumBoard ----
+// ─────────────────────────────────────────────────────────────
+// Main PodiumBoard
+// ─────────────────────────────────────────────────────────────
 export default function PodiumBoard({ bids }: PodiumBoardProps) {
   const king = bids[0] ?? null;
   const runnerUp = bids[1] ?? null;
   const jester = bids[2] ?? null;
   const rest = bids.slice(3);
 
-  // Track previous king to detect throne changes
   const prevKingIdRef = useRef<string | null>(null);
-
-  // Animation 4: overlay active for 1.5 s
   const [crowning, setCrowning] = useState(false);
-  // Animation 5: confetti active for 3 s
   const [showConfetti, setShowConfetti] = useState(false);
 
+  // Animation 4 & 5: detect king change → dim + confetti
   useEffect(() => {
     const newKingId = king?.id ?? null;
-    // Only fire if a previous king existed and the id actually changed
     if (
       prevKingIdRef.current !== null &&
       newKingId !== null &&
@@ -250,7 +315,7 @@ export default function PodiumBoard({ bids }: PodiumBoardProps) {
 
   return (
     <>
-      {/* ---- Animation 4: Spotlight overlay (fixed, behind king z-[100]) ---- */}
+      {/* Animation 4: bg-black/85 spotlight overlay */}
       <AnimatePresence>
         {crowning && (
           <motion.div
@@ -265,30 +330,37 @@ export default function PodiumBoard({ bids }: PodiumBoardProps) {
         )}
       </AnimatePresence>
 
-      {/* ---- Animation 5: Confetti burst ---- */}
+      {/* Animation 5: confetti burst */}
       {showConfetti && <CrownConfetti onDone={handleConfettiDone} />}
 
-      {/* ---- Main board ---- */}
+      {/* Main board */}
       <LayoutGroup id="podium">
         <div className="w-full max-w-lg mx-auto px-4 space-y-8">
 
-          {/* TOP 3 */}
+          {/* ── TOP 3 ── */}
           <div className="flex items-end justify-center gap-8 pt-8">
 
             {/* Runner-up — left */}
-            <div className="pb-4">
-              {runnerUp ? (
-                <RunnerUpCard bid={runnerUp} />
-              ) : (
-                <motion.div layout className="flex flex-col items-center gap-2 opacity-30">
-                  <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700" />
-                  <span className="text-xs text-slate-600 tracking-widest">#2</span>
-                </motion.div>
-              )}
+            <div className="pb-4 min-w-[100px] flex justify-center">
+              {/* AnimatePresence key-based: when runnerUp.id changes, old card exits violently */}
+              <AnimatePresence mode="popLayout">
+                {runnerUp ? (
+                  <RunnerUpCard key={runnerUp.id} bid={runnerUp} />
+                ) : (
+                  <motion.div
+                    key="empty-2"
+                    layout
+                    className="flex flex-col items-center gap-2 opacity-30"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700" />
+                    <span className="text-xs text-slate-600 tracking-widest">#2</span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
-            {/* King — center, elevated above overlay during crowning ceremony */}
-            <div className={`pb-0 transition-none ${crowning ? "relative z-[100]" : ""}`}>
+            {/* King — center, z-[100] above overlay during ceremony */}
+            <div className={`pb-0 ${crowning ? "relative z-[100]" : ""}`}>
               {king ? (
                 <motion.div
                   layout
@@ -296,7 +368,6 @@ export default function PodiumBoard({ bids }: PodiumBoardProps) {
                   transition={SPRING}
                   className="flex flex-col items-center gap-2"
                 >
-                  {/* Extra outer glow amplified during ceremony */}
                   <motion.div
                     className="relative"
                     animate={
@@ -334,33 +405,42 @@ export default function PodiumBoard({ bids }: PodiumBoardProps) {
             </div>
 
             {/* Jester — right */}
-            <div className="pb-4">
-              {jester ? (
-                <JesterCard bid={jester} />
-              ) : (
-                <motion.div layout className="flex flex-col items-center gap-2 opacity-30">
-                  <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700" />
-                  <span className="text-xs text-slate-600 tracking-widest">#3</span>
-                </motion.div>
-              )}
+            <div className="pb-4 min-w-[100px] flex justify-center">
+              <AnimatePresence mode="popLayout">
+                {jester ? (
+                  <JesterCard key={jester.id} bid={jester} />
+                ) : (
+                  <motion.div
+                    key="empty-3"
+                    layout
+                    className="flex flex-col items-center gap-2 opacity-30"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700" />
+                    <span className="text-xs text-slate-600 tracking-widest">#3</span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
 
-          {/* POSITIONS 4–10 */}
+          {/* ── POSITIONS 4–10 with violent exits ── */}
           {(rest.length > 0 || bids.length < 10) && (
             <div className="space-y-2">
               <p className="text-xs font-extrabold text-slate-500 tracking-[0.2em] px-1 mb-3">
                 LEADERBOARD
               </p>
-              {Array.from({ length: 7 }, (_, i) => {
-                const rank = i + 4;
-                const bid = rest[i];
-                return bid ? (
-                  <LeaderRow key={bid.id} bid={bid} rank={rank} />
-                ) : (
-                  <EmptySlot key={`empty-${rank}`} rank={rank} />
-                );
-              })}
+              {/* AnimatePresence mode="popLayout": kicked bids play violent exit */}
+              <AnimatePresence mode="popLayout">
+                {Array.from({ length: 7 }, (_, i) => {
+                  const rank = i + 4;
+                  const bid = rest[i];
+                  return bid ? (
+                    <LeaderRow key={bid.id} bid={bid} rank={rank} />
+                  ) : (
+                    <EmptySlot key={`empty-${rank}`} rank={rank} />
+                  );
+                })}
+              </AnimatePresence>
             </div>
           )}
         </div>
