@@ -1,104 +1,171 @@
 'use client';
 
-// /dashboard — Creator settings page (auth-protected).
-//
-// On load:
-//   1. Checks session via getSession() → redirects to /login if none.
-//   2. Fetches creator row by auth_user_id.
-//   3. If no row exists, auto-INSERTs one (new creator first login).
-//   4. Pre-fills all form fields from existing data.
-//
-// Header: user avatar + email + logout button.
-// Sections: Analytics · Connect Stripe (BYOS) · Public URL · Save · Seed.
-
-import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { motion, AnimatePresence, useMotionValue, useSpring, animate as fmAnimate } from 'framer-motion';
 import { createClient } from '@/lib/supabase/client';
 import { getSession, signOut } from '@/lib/auth';
+import RollingNumber from '@/components/RollingNumber';
 import type { User } from '@supabase/supabase-js';
 import type { Bid } from '@/types';
 
-// ── Fake seed data ─────────────────────────────────────────────────────────
+// ── Rolling count (integers, no $ prefix) ──────────────────────────────────
+function RollingCount({ value, className }: { value: number; className?: string }) {
+  const motionValue = useMotionValue(value);
+  const springValue = useSpring(motionValue, { stiffness: 90, damping: 14, mass: 0.6 });
+  const displayRef = useRef<HTMLSpanElement>(null);
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      motionValue.set(value);
+      return;
+    }
+    fmAnimate(motionValue, value, { duration: 1.4, ease: [0.12, 1, 0.28, 1] });
+  }, [value, motionValue]);
+
+  useEffect(() => {
+    return springValue.on('change', (v) => {
+      if (displayRef.current) {
+        displayRef.current.textContent = Math.round(Math.max(0, v)).toLocaleString('en-US');
+      }
+    });
+  }, [springValue]);
+
+  return (
+    <span ref={displayRef} className={className}>
+      {Math.round(value).toLocaleString('en-US')}
+    </span>
+  );
+}
+
+// ── Seed data (exact handles + amounts from spec) ───────────────────────────
 const FAKE_FANS = [
-  { handle: '@BigSpenderSteve', message: 'I sold my couch for this', amount: 1200 },
-  { handle: '@QueenBee99', message: 'bow down peasants', amount: 1100 },
-  { handle: '@CryptoChad', message: 'TO THE MOON', amount: 1050 },
-  { handle: '@PizzaLover420', message: 'I skipped lunch for this bid', amount: 900 },
-  { handle: '@GamerGurl', message: 'gg ez', amount: 850 },
-  { handle: '@DadJokeDave', message: "Hi Hungry, I'm on the podium", amount: 750 },
-  { handle: '@CatMom_Lisa', message: 'My cat told me to do this', amount: 700 },
-  { handle: '@SneakerheadSam', message: 'Cheaper than my last pair of Jordans', amount: 650 },
-  { handle: '@NightOwlNina', message: "It's 3am and I have no regrets", amount: 550 },
-  { handle: '@BudgetKing', message: 'Living large on minimum wage', amount: 500 },
+  { handle: '@CryptoChad',       message: 'TO THE MOON 🚀',                    amount: 1200 },
+  { handle: '@BigSpenderSteve',  message: 'I sold my couch for this',           amount: 1100 },
+  { handle: '@DadJokeDave',      message: "Hi Hungry, I'm on the podium",        amount: 1000 },
+  { handle: '@MemeQueen99',      message: 'This is fine 🔥',                    amount:  900 },
+  { handle: '@TouchGrassPlease', message: 'Outside is overrated anyway',         amount:  800 },
+  { handle: '@NFTBro2024',       message: 'My jpeg told me to do this',          amount:  700 },
+  { handle: '@YOLOKing',         message: 'You only live once',                  amount:  700 },
+  { handle: '@VibeCheck',        message: 'Vibe: immaculate ✅',                 amount:  600 },
+  { handle: '@NoSleepCrew',      message: "It's 3am and I have no regrets",      amount:  600 },
+  { handle: '@JustHereToWatch',  message: 'Here for the drama honestly',         amount:  500 },
 ];
 
-// ── Animated counter ───────────────────────────────────────────────────────
-function AnimatedCounter({ value }: { value: number }) {
-  const [display, setDisplay] = useState(0);
-  useEffect(() => {
-    if (value === 0) { setDisplay(0); return; }
-    const steps = 30;
-    const increment = value / steps;
-    let step = 0;
-    const interval = setInterval(() => {
-      step++;
-      setDisplay(Math.min(Math.round(increment * step), value));
-      if (step >= steps) clearInterval(interval);
-    }, 800 / steps);
-    return () => clearInterval(interval);
-  }, [value]);
-  return <>{display.toLocaleString('en-US')}</>;
-}
-
-// ── Types ──────────────────────────────────────────────────────────────────
+// ── Types ───────────────────────────────────────────────────────────────────
 interface Analytics {
-  totalRevenue: number;
+  totalRevenueCents: number;
   totalBids: number;
   currentKing: Bid | null;
+  avgBidCents: number;
 }
 
-// ── Component ─────────────────────────────────────────────────────────────
+interface CreatorRow {
+  id: string;
+  slug: string;
+  stripe_secret_key: string;
+  stripe_webhook_secret: string;
+  plan_type: string;
+  auth_user_id: string;
+}
+
+// ── Slug validation ─────────────────────────────────────────────────────────
+function validateSlug(raw: string): string | null {
+  const s = raw.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (s.length < 3) return 'Slug must be at least 3 characters';
+  return null;
+}
+
+function cleanSlug(raw: string) {
+  return raw.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+}
+
+// ── Plan badge config ────────────────────────────────────────────────────────
+const PLAN_CONFIG: Record<string, {
+  badge: string;
+  badgeClass: string;
+  dotClass: string;
+  headline: string;
+  body: string;
+  showUpgrade: boolean;
+}> = {
+  founding: {
+    badge: '👑 Founding Creator',
+    badgeClass: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30',
+    dotClass: 'bg-yellow-400',
+    headline: '0% Platform Fee — Forever',
+    body: 'You are one of our 10 founding creators. 100% of every payment goes directly to you.',
+    showUpgrade: false,
+  },
+  pro: {
+    badge: '⚡ Pro',
+    badgeClass: 'text-purple-400 bg-purple-400/10 border-purple-400/30',
+    dotClass: 'bg-purple-400',
+    headline: '0% Platform Fee',
+    body: 'You are on the Pro plan. Every dollar fans pay goes straight to you.',
+    showUpgrade: false,
+  },
+  starter: {
+    badge: 'Starter',
+    badgeClass: 'text-slate-400 bg-slate-700/40 border-slate-600/40',
+    dotClass: 'bg-slate-400',
+    headline: '15% Platform Fee',
+    body: 'Upgrade to Pro to keep 100% of every payment.',
+    showUpgrade: true,
+  },
+};
+
+// ── Component ────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const supabase = createClient();
 
-  // ── Auth state
+  // Auth
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // ── Creator form state
-  const [creatorId, setCreatorId] = useState<string | null>(null);
-  const [slug, setSlug] = useState('');
-  const [stripeSecretKey, setStripeSecretKey] = useState('');
-  const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
-  const [stripeConnected, setStripeConnected] = useState(false);
+  // Creator row
+  const [creator, setCreator] = useState<CreatorRow | null>(null);
 
-  // ── UI state
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
-  const [seeding, setSeeding] = useState(false);
-  const [seedMsg, setSeedMsg] = useState<string | null>(null);
+  // Slug section
+  const [slug, setSlug] = useState('');
+  const [slugError, setSlugError] = useState<string | null>(null);
+  const [savingSlug, setSavingSlug] = useState(false);
+  const [slugMsg, setSlugMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  // Stripe section
+  const [stripeKey, setStripeKey] = useState('');
+  const [stripeWebhook, setStripeWebhook] = useState('');
+  const [stripeConnected, setStripeConnected] = useState(false);
+  const [savingStripe, setSavingStripe] = useState(false);
+  const [stripeMsg, setStripeMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  // Analytics
   const [analytics, setAnalytics] = useState<Analytics>({
-    totalRevenue: 0, totalBids: 0, currentKing: null,
+    totalRevenueCents: 0,
+    totalBids: 0,
+    currentKing: null,
+    avgBidCents: 0,
   });
 
-  // ── Step 1: check session, redirect if missing ─────────────────────────
+  // Seeding
+  const [seeding, setSeeding] = useState(false);
+  const [seedMsg, setSeedMsg] = useState<string | null>(null);
+
+  // ── Auth check ─────────────────────────────────────────────────────────────
   useEffect(() => {
     getSession().then((session) => {
-      if (!session) {
-        window.location.href = '/login';
-        return;
-      }
+      if (!session) { window.location.href = '/login'; return; }
       setUser(session.user);
       setAuthLoading(false);
     });
   }, []);
 
-  // ── Step 2: load creator row by auth_user_id ───────────────────────────
+  // ── Load / create creator row ──────────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
 
-    async function loadOrCreateCreator() {
-      // Try to find the creator row linked to this auth user
+    async function loadOrCreate() {
       const { data: existing } = await supabase
         .from('creators')
         .select('*')
@@ -106,16 +173,11 @@ export default function DashboardPage() {
         .maybeSingle();
 
       if (existing) {
-        setCreatorId(existing.id);
-        setSlug(existing.slug || '');
-        setStripeSecretKey(existing.stripe_secret_key || '');
-        setStripeWebhookSecret(existing.stripe_webhook_secret || '');
-        setStripeConnected(!!(existing.stripe_secret_key && existing.stripe_webhook_secret));
+        hydrate(existing);
         return;
       }
 
-      // No row → auto-INSERT for first-time creator login
-      // Derive a temp slug from email username (unique enough as starting point)
+      // First login — auto-INSERT
       const emailUser = (user!.email ?? '').split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '') || 'creator';
       const tempSlug = `${emailUser}-${user!.id.slice(0, 6)}`;
 
@@ -130,114 +192,129 @@ export default function DashboardPage() {
         .select()
         .single();
 
-      if (!error && created) {
-        setCreatorId(created.id);
-        setSlug(created.slug);
-      }
+      if (!error && created) hydrate(created);
     }
 
-    loadOrCreateCreator();
+    loadOrCreate();
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Analytics ──────────────────────────────────────────────────────────
+  function hydrate(row: CreatorRow) {
+    setCreator(row);
+    setSlug(row.slug ?? '');
+    setStripeKey(row.stripe_secret_key ?? '');
+    setStripeWebhook(row.stripe_webhook_secret ?? '');
+    setStripeConnected(!!(row.stripe_secret_key && row.stripe_webhook_secret));
+  }
+
+  // ── Analytics ──────────────────────────────────────────────────────────────
   const fetchAnalytics = useCallback(async (cid: string) => {
     const { data: bids } = await supabase
       .from('bids')
-      .select('amount_paid')
+      .select('*')
       .eq('creator_id', cid);
 
-    const totalRevenue = bids?.reduce((sum, b) => sum + b.amount_paid, 0) ?? 0;
+    const totalRevenueCents = bids?.reduce((s, b) => s + b.amount_paid, 0) ?? 0;
     const totalBids = bids?.length ?? 0;
+    const avgBidCents = totalBids > 0 ? Math.round(totalRevenueCents / totalBids) : 0;
 
-    const { data: king } = await supabase
-      .from('bids')
-      .select('*')
-      .eq('creator_id', cid)
-      .order('amount_paid', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const king = bids?.length
+      ? bids.reduce((best, b) => (b.amount_paid > best.amount_paid ? b : best), bids[0])
+      : null;
 
-    setAnalytics({ totalRevenue, totalBids, currentKing: king ?? null });
+    setAnalytics({ totalRevenueCents, totalBids, currentKing: king ?? null, avgBidCents });
   }, [supabase]);
 
   useEffect(() => {
-    if (creatorId) fetchAnalytics(creatorId);
-  }, [creatorId, fetchAnalytics]);
+    if (creator?.id) fetchAnalytics(creator.id);
+  }, [creator?.id, fetchAnalytics]);
 
-  // ── Save settings ──────────────────────────────────────────────────────
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveMsg(null);
+  // ── Save slug ──────────────────────────────────────────────────────────────
+  const handleSaveSlug = async () => {
+    const err = validateSlug(slug);
+    if (err) { setSlugError(err); return; }
+    setSlugError(null);
+    setSavingSlug(true);
+    setSlugMsg(null);
 
-    if (!slug.trim()) {
-      setSaveMsg({ type: 'err', text: 'Slug is required' });
-      setSaving(false);
-      return;
-    }
-    if (!stripeSecretKey.trim() || !stripeWebhookSecret.trim()) {
-      setSaveMsg({ type: 'err', text: 'Both Stripe keys are required' });
-      setSaving(false);
-      return;
-    }
+    const clean = cleanSlug(slug);
+    const { data, error } = await supabase
+      .from('creators')
+      .update({ slug: clean })
+      .eq('id', creator!.id)
+      .select()
+      .single();
 
-    const cleanSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
-    const row = {
-      slug: cleanSlug,
-      stripe_secret_key: stripeSecretKey.trim(),
-      stripe_webhook_secret: stripeWebhookSecret.trim(),
-      auth_user_id: user!.id,
-    };
-
-    let result;
-    if (creatorId) {
-      result = await supabase.from('creators').update(row).eq('id', creatorId).select().single();
-    } else {
-      result = await supabase.from('creators').insert(row).select().single();
-    }
-
-    if (result.error) {
-      setSaveMsg({
+    if (error) {
+      setSlugMsg({
         type: 'err',
-        text: result.error.code === '23505' ? 'That slug is already taken' : result.error.message,
+        text: error.code === '23505' ? 'That slug is already taken — try another' : error.message,
       });
     } else {
-      setCreatorId(result.data.id);
-      setSlug(result.data.slug);
-      setStripeConnected(true);
-      setSaveMsg({ type: 'ok', text: 'Settings saved!' });
+      setCreator((c) => c ? { ...c, slug: data.slug } : c);
+      setSlug(data.slug);
+      setSlugMsg({ type: 'ok', text: '✓ Saved' });
+      setTimeout(() => setSlugMsg(null), 3000);
     }
-    setSaving(false);
+    setSavingSlug(false);
   };
 
-  // ── Seed fake bids ─────────────────────────────────────────────────────
+  // ── Save Stripe keys ───────────────────────────────────────────────────────
+  const handleSaveStripe = async () => {
+    if (!stripeKey.trim() || !stripeWebhook.trim()) {
+      setStripeMsg({ type: 'err', text: 'Both keys are required' });
+      return;
+    }
+    setSavingStripe(true);
+    setStripeMsg(null);
+
+    const { error } = await supabase
+      .from('creators')
+      .update({
+        stripe_secret_key: stripeKey.trim(),
+        stripe_webhook_secret: stripeWebhook.trim(),
+      })
+      .eq('id', creator!.id);
+
+    if (error) {
+      setStripeMsg({ type: 'err', text: error.message });
+    } else {
+      setStripeConnected(true);
+      setStripeMsg({ type: 'ok', text: '✓ Connected' });
+      setTimeout(() => setStripeMsg(null), 3000);
+    }
+    setSavingStripe(false);
+  };
+
+  // ── Seed fake bids ─────────────────────────────────────────────────────────
   const handleSeed = async () => {
-    if (!creatorId) { setSeedMsg('Save your settings first'); return; }
+    if (!creator?.id) return;
+    if (analytics.totalBids > 0) {
+      setSeedMsg('Podium already has bids — seeding disabled');
+      return;
+    }
     setSeeding(true);
     setSeedMsg(null);
 
     const rows = FAKE_FANS.map((fan) => ({
-      creator_id: creatorId,
+      creator_id: creator.id,
       fan_handle: fan.handle,
       fan_avatar_url: null,
       message: fan.message,
       amount_paid: fan.amount,
-      stripe_payment_intent_id: `pi_seed_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      stripe_payment_intent_id: `pi_seed_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     }));
 
     const { error } = await supabase.from('bids').insert(rows);
     if (error) {
       setSeedMsg(`Error: ${error.message}`);
     } else {
-      setSeedMsg('10 fake fans seeded! Check your podium.');
-      fetchAnalytics(creatorId);
+      setSeedMsg('🌱 10 fans seeded! Check your podium.');
+      fetchAnalytics(creator.id);
     }
     setSeeding(false);
   };
 
-  const formatDollars = (cents: number) =>
-    `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-
-  // ── Loading spinner while auth resolves ────────────────────────────────
+  // ── Loading ────────────────────────────────────────────────────────────────
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -250,41 +327,44 @@ export default function DashboardPage() {
     );
   }
 
-  // ── Dashboard UI ───────────────────────────────────────────────────────
+  const planKey = (creator?.plan_type ?? 'starter') as keyof typeof PLAN_CONFIG;
+  const plan = PLAN_CONFIG[planKey] ?? PLAN_CONFIG.starter;
+  const savedSlug = creator?.slug ?? '';
+
+  // ── UI ─────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-950">
-      {/* ── Top header bar with user info ── */}
-      <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
-          <span className="text-sm font-bold text-white tracking-wide">
-            Creator <span className="text-indigo-400">Dashboard</span>
-          </span>
 
+      {/* ── SECTION 1: Header ─────────────────────────────────────────────── */}
+      <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/80 backdrop-blur-sm">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+          {/* Title */}
+          <h1 className="text-sm font-bold text-white tracking-wide">
+            Your Podium Dashboard <span className="text-yellow-400">👑</span>
+          </h1>
+
+          {/* User info */}
           {user && (
             <div className="flex items-center gap-3">
-              {/* Avatar */}
               {user.user_metadata?.avatar_url ? (
                 <img
                   src={user.user_metadata.avatar_url}
-                  alt={user.email ?? 'Avatar'}
-                  className="w-8 h-8 rounded-full border border-slate-700 object-cover"
+                  alt={user.email ?? 'avatar'}
+                  className="w-8 h-8 rounded-full border border-slate-700 object-cover flex-shrink-0"
                 />
               ) : (
-                <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">
-                  {(user.email ?? 'U').charAt(0).toUpperCase()}
+                <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center
+                               text-white text-xs font-bold flex-shrink-0">
+                  {(user.email ?? 'U')[0].toUpperCase()}
                 </div>
               )}
-
-              {/* Email */}
               <span className="text-xs text-slate-400 hidden sm:block max-w-[160px] truncate">
                 {user.email}
               </span>
-
-              {/* Logout */}
               <motion.button
                 onClick={() => signOut()}
-                className="text-xs text-slate-500 hover:text-red-400 transition-colors
-                           px-3 py-1.5 rounded-lg hover:bg-red-950/30 font-medium"
+                className="text-xs text-slate-500 hover:text-red-400 px-3 py-1.5 rounded-lg
+                           hover:bg-red-950/30 font-medium transition-colors"
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
               >
@@ -295,261 +375,359 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {/* ── Page content ── */}
-      <div className="max-w-2xl mx-auto px-4 py-10 space-y-8">
-        {/* Title */}
-        <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }}>
-          <h1 className="text-3xl font-extrabold text-white">
+      <div className="max-w-2xl mx-auto px-4 py-10 space-y-6">
+
+        {/* Page heading */}
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+          <h2 className="text-3xl font-extrabold text-white">
             Your{' '}
             <span className="bg-gradient-to-r from-indigo-400 to-violet-400 bg-clip-text text-transparent">
-              Ego Podium
-            </span>
-          </h1>
+              Podium Dashboard
+            </span>{' '}
+            👑
+          </h2>
           <p className="text-sm text-slate-500 mt-1">Configure your podium and track earnings</p>
         </motion.div>
 
-        {/* ── Analytics ── */}
+        {/* ── SECTION 3: Analytics ──────────────────────────────────────────── */}
         <motion.section
-          className="grid grid-cols-3 gap-3"
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+          transition={{ delay: 0.08 }}
         >
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 group hover:border-green-800/50 transition-colors">
-            <span className="text-xs text-slate-500 block mb-2 tracking-widest">REVENUE</span>
-            <span className="text-2xl font-bold text-green-400 block">
-              $<AnimatedCounter value={Math.round(analytics.totalRevenue / 100)} />
-            </span>
-          </div>
+          <p className="text-xs font-semibold tracking-widest text-slate-600 uppercase mb-3">Analytics</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {/* Revenue */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4
+                           hover:border-green-800/50 transition-colors group">
+              <span className="text-[10px] text-slate-500 tracking-widest uppercase block mb-2">Revenue</span>
+              <RollingNumber
+                value={analytics.totalRevenueCents}
+                className="text-2xl font-bold text-green-400"
+              />
+            </div>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 group hover:border-indigo-800/50 transition-colors">
-            <span className="text-xs text-slate-500 block mb-2 tracking-widest">BIDS</span>
-            <span className="text-2xl font-bold text-indigo-400 block">
-              <AnimatedCounter value={analytics.totalBids} />
-            </span>
-          </div>
+            {/* Total bids */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4
+                           hover:border-indigo-800/50 transition-colors">
+              <span className="text-[10px] text-slate-500 tracking-widest uppercase block mb-2">Bids</span>
+              <RollingCount
+                value={analytics.totalBids}
+                className="text-2xl font-bold text-indigo-400"
+              />
+            </div>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 group hover:border-yellow-800/50 transition-colors">
-            <span className="text-xs text-slate-500 block mb-2 tracking-widest">KING</span>
-            <span className="text-base font-bold text-yellow-400 truncate block">
-              {analytics.currentKing?.fan_handle ?? '—'}
-            </span>
-            {analytics.currentKing && (
-              <span className="text-xs text-slate-500 mt-0.5 block">
-                {formatDollars(analytics.currentKing.amount_paid)}
+            {/* Current King */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4
+                           hover:border-yellow-800/50 transition-colors">
+              <span className="text-[10px] text-slate-500 tracking-widest uppercase block mb-2">King</span>
+              <span className="text-base font-bold text-yellow-400 truncate block">
+                {analytics.currentKing?.fan_handle ?? '—'}
               </span>
-            )}
+              {analytics.currentKing && (
+                <RollingNumber
+                  value={analytics.currentKing.amount_paid}
+                  className="text-xs text-slate-500 mt-0.5"
+                />
+              )}
+            </div>
+
+            {/* Avg bid */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4
+                           hover:border-violet-800/50 transition-colors">
+              <span className="text-[10px] text-slate-500 tracking-widest uppercase block mb-2">Avg Bid</span>
+              <RollingNumber
+                value={analytics.avgBidCents}
+                className="text-2xl font-bold text-violet-400"
+              />
+            </div>
           </div>
         </motion.section>
 
-        {/* ── Stripe (BYOS) ── */}
+        {/* ── SECTION 2a: Slug ──────────────────────────────────────────────── */}
+        <motion.section
+          className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.16 }}
+        >
+          <div>
+            <h3 className="text-lg font-bold text-white">Setup Your Podium</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Choose your public page URL</p>
+          </div>
+
+          {/* Slug input */}
+          <div>
+            <label className="text-[10px] text-slate-500 tracking-widest uppercase block mb-1.5 font-medium">
+              Your Page URL
+            </label>
+            <input
+              type="text"
+              value={slug}
+              onChange={(e) => {
+                setSlug(e.target.value);
+                setSlugError(null);
+                setSlugMsg(null);
+              }}
+              placeholder="mrbeast"
+              maxLength={40}
+              className={`w-full bg-slate-950 border rounded-xl px-4 py-3 text-white
+                         placeholder:text-slate-600 text-sm
+                         focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,102,241,0.12)]
+                         transition-all ${slugError
+                           ? 'border-red-500/60 focus:border-red-500/80'
+                           : 'border-slate-700 focus:border-indigo-500/60'}`}
+            />
+            {slugError && (
+              <p className="text-xs text-red-400 mt-1.5">{slugError}</p>
+            )}
+          </div>
+
+          {/* Live preview */}
+          <div className="bg-slate-950/60 rounded-xl px-4 py-3 border border-slate-800/70">
+            <span className="text-xs text-slate-500">Your page: </span>
+            <span className="text-sm font-mono">
+              <span className="text-slate-600">creatorpodium.com/</span>
+              <span className={`font-bold ${cleanSlug(slug).length >= 3 ? 'text-indigo-400' : 'text-slate-600'}`}>
+                {slug ? cleanSlug(slug) : '…'}
+              </span>
+            </span>
+          </div>
+
+          {/* Save slug */}
+          <div className="flex items-center gap-3">
+            <motion.button
+              onClick={handleSaveSlug}
+              disabled={savingSlug || !creator}
+              className="px-5 py-2.5 rounded-xl font-semibold text-sm text-white
+                         bg-indigo-600 hover:bg-indigo-500
+                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+            >
+              {savingSlug ? (
+                <span className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Saving…
+                </span>
+              ) : 'Save URL'}
+            </motion.button>
+
+            <AnimatePresence>
+              {slugMsg && (
+                <motion.span
+                  key="slug-msg"
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0 }}
+                  className={`text-sm font-medium ${slugMsg.type === 'ok' ? 'text-green-400' : 'text-red-400'}`}
+                >
+                  {slugMsg.text}
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </div>
+        </motion.section>
+
+        {/* ── SECTION 2b: Stripe ────────────────────────────────────────────── */}
         <motion.section
           className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5"
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
+          transition={{ delay: 0.22 }}
         >
+          {/* Header row */}
           <div className="flex items-start justify-between">
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg font-bold text-white">Connect Stripe</h2>
-                <AnimatePresence>
-                  {stripeConnected && (
-                    <motion.div
-                      initial={{ scale: 0, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ scale: 0, opacity: 0 }}
-                      className="w-6 h-6 rounded-full bg-green-500/20 border border-green-500/40
-                                 flex items-center justify-center"
-                    >
-                      <svg className="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24"
-                           stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-              <p className="text-sm text-slate-500 mt-0.5">Bring Your Own Stripe (BYOS)</p>
+              <h3 className="text-lg font-bold text-white">Connect Stripe</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Bring Your Own Stripe (BYOS)</p>
             </div>
-            {stripeConnected && (
-              <span className="text-xs text-green-400 bg-green-500/10 border border-green-500/20
-                               px-2.5 py-1 rounded-full font-medium">
-                Connected
+            {/* Connected / Not Connected badge */}
+            {stripeConnected ? (
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-green-400
+                               bg-green-500/10 border border-green-500/25 px-3 py-1.5 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
+                ✓ Connected
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-red-400
+                               bg-red-500/10 border border-red-500/25 px-3 py-1.5 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block" />
+                ⚠ Not Connected
               </span>
             )}
           </div>
 
-          <div className="bg-slate-950/60 rounded-xl px-4 py-3 border border-indigo-900/40">
-            <p className="text-sm text-white font-medium">
-              Connect your OWN Stripe account. 100% of payments go directly to you.
+          {/* BYOS callout */}
+          <div className="bg-indigo-950/40 rounded-xl px-4 py-3 border border-indigo-800/30">
+            <p className="text-sm text-white font-semibold">
+              💰 100% of payments go directly to YOU
             </p>
-            <p className="text-xs text-slate-500 mt-1">
-              We never touch your money. Fans pay through your Stripe. No platform fee.
+            <p className="text-xs text-slate-400 mt-1">
+              Connect your own Stripe account. Fans pay through your Stripe — we never touch your money.
             </p>
           </div>
 
           {/* Secret key */}
           <div>
-            <label className="text-xs text-slate-500 mb-1.5 block font-medium tracking-widest">
-              STRIPE SECRET KEY
+            <label className="text-[10px] text-slate-500 tracking-widest uppercase block mb-1.5 font-medium">
+              Stripe Secret Key
             </label>
             <div className="relative">
               <input
                 type="password"
-                value={stripeSecretKey}
-                onChange={(e) => { setStripeSecretKey(e.target.value); setStripeConnected(false); }}
-                placeholder="sk_live_..."
+                value={stripeKey}
+                onChange={(e) => { setStripeKey(e.target.value); setStripeConnected(false); setStripeMsg(null); }}
+                placeholder="sk_live_... or sk_test_..."
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3
                            text-white placeholder:text-slate-600 text-sm font-mono
                            focus:outline-none focus:border-indigo-500/60
                            focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)] transition-all"
               />
-              {stripeSecretKey && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-green-500" />
+              {stripeKey && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-green-500" />
               )}
             </div>
           </div>
 
           {/* Webhook secret */}
           <div>
-            <label className="text-xs text-slate-500 mb-1.5 block font-medium tracking-widest">
-              STRIPE WEBHOOK SECRET
+            <label className="text-[10px] text-slate-500 tracking-widest uppercase block mb-1.5 font-medium">
+              Stripe Webhook Secret
             </label>
             <div className="relative">
               <input
                 type="password"
-                value={stripeWebhookSecret}
-                onChange={(e) => { setStripeWebhookSecret(e.target.value); setStripeConnected(false); }}
+                value={stripeWebhook}
+                onChange={(e) => { setStripeWebhook(e.target.value); setStripeConnected(false); setStripeMsg(null); }}
                 placeholder="whsec_..."
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3
                            text-white placeholder:text-slate-600 text-sm font-mono
                            focus:outline-none focus:border-indigo-500/60
                            focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)] transition-all"
               />
-              {stripeWebhookSecret && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-green-500" />
+              {stripeWebhook && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-green-500" />
               )}
             </div>
           </div>
+
+          {/* Save Stripe */}
+          <div className="flex items-center gap-3">
+            <motion.button
+              onClick={handleSaveStripe}
+              disabled={savingStripe || !creator}
+              className="px-5 py-2.5 rounded-xl font-semibold text-sm text-white
+                         bg-indigo-600 hover:bg-indigo-500
+                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+            >
+              {savingStripe ? (
+                <span className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Saving…
+                </span>
+              ) : 'Save Keys'}
+            </motion.button>
+
+            <AnimatePresence>
+              {stripeMsg && (
+                <motion.span
+                  key="stripe-msg"
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0 }}
+                  className={`text-sm font-medium ${stripeMsg.type === 'ok' ? 'text-green-400' : 'text-red-400'}`}
+                >
+                  {stripeMsg.text}
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </div>
         </motion.section>
 
-        {/* ── Slug / URL ── */}
+        {/* ── SECTION 4: Podium Controls ───────────────────────────────────── */}
         <motion.section
           className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4"
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
+          transition={{ delay: 0.28 }}
         >
           <div>
-            <h2 className="text-lg font-bold text-white">Public URL</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Choose your podium link</p>
+            <h3 className="text-lg font-bold text-white">Podium Controls</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Manage and preview your live podium</p>
           </div>
 
-          <input
-            type="text"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            placeholder="mrbeast"
-            maxLength={40}
-            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3
-                       text-white placeholder:text-slate-600 text-sm
-                       focus:outline-none focus:border-indigo-500/60
-                       focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)] transition-all"
-          />
-
-          <div className="bg-slate-950/60 rounded-xl px-4 py-3 border border-slate-800/70">
-            <span className="text-xs text-slate-500">Your page: </span>
-            <span className="text-sm font-mono">
-              <span className="text-slate-600">yourcreatorpodium.com/</span>
-              <span className="text-indigo-400 font-bold">
-                {slug ? slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') : '…'}
-              </span>
-            </span>
-          </div>
-        </motion.section>
-
-        {/* ── Save button ── */}
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.35 }}
-        >
-          <motion.button
-            onClick={handleSave}
-            disabled={saving}
-            className="w-full py-4 rounded-2xl font-bold text-white text-base
-                       bg-gradient-to-r from-indigo-600 to-violet-700
-                       hover:shadow-[0_0_30px_rgba(99,102,241,0.3)]
-                       disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.98 }}
-          >
-            {saving ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Saving…
-              </span>
-            ) : 'Save All Settings'}
-          </motion.button>
-
-          <AnimatePresence>
-            {saveMsg && (
-              <motion.p
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className={`text-sm text-center mt-3 ${
-                  saveMsg.type === 'ok' ? 'text-green-400' : 'text-red-400'
-                }`}
+          <div className="flex flex-col sm:flex-row gap-3">
+            {/* Seed button */}
+            <div className="flex-1">
+              <motion.button
+                onClick={handleSeed}
+                disabled={seeding || !creator || analytics.totalBids > 0}
+                className="w-full py-3 rounded-xl font-semibold text-sm
+                           bg-slate-950 border border-slate-700 text-slate-200
+                           hover:border-green-500/40 hover:shadow-[0_0_16px_rgba(34,197,94,0.1)]
+                           disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                whileHover={{ scale: analytics.totalBids === 0 ? 1.01 : 1 }}
+                whileTap={{ scale: analytics.totalBids === 0 ? 0.97 : 1 }}
               >
-                {saveMsg.text}
-              </motion.p>
-            )}
-          </AnimatePresence>
-        </motion.div>
+                {seeding ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="w-4 h-4 border-2 border-slate-600 border-t-green-400 rounded-full animate-spin" />
+                    Seeding…
+                  </span>
+                ) : analytics.totalBids > 0 ? (
+                  '🌱 Already Seeded'
+                ) : (
+                  '🌱 Seed My Podium'
+                )}
+              </motion.button>
+              {analytics.totalBids === 0 && (
+                <p className="text-[10px] text-slate-600 mt-1.5 text-center">
+                  Inserts 10 demo fans — only works on an empty podium
+                </p>
+              )}
+            </div>
 
-        {/* ── Seeding ── */}
-        <motion.section
-          className="bg-slate-900 border border-dashed border-slate-700 rounded-2xl p-6 space-y-4"
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-        >
-          <div>
-            <h2 className="text-lg font-bold text-white">Demo Seeding</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Populate your podium with 10 fake fans ($5–$12). Real fans can outbid them.
-            </p>
+            {/* Preview button */}
+            <div className="flex-1">
+              <motion.a
+                href={savedSlug ? `/${savedSlug}` : undefined}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={!savedSlug ? (e) => e.preventDefault() : undefined}
+                className={`flex items-center justify-center gap-2 w-full py-3 rounded-xl
+                           font-semibold text-sm border transition-all
+                           ${savedSlug
+                             ? 'bg-slate-950 border-indigo-700/50 text-indigo-300 hover:border-indigo-500 hover:shadow-[0_0_16px_rgba(99,102,241,0.15)] cursor-pointer'
+                             : 'bg-slate-950/50 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
+                           }`}
+                whileHover={savedSlug ? { scale: 1.01 } : {}}
+                whileTap={savedSlug ? { scale: 0.97 } : {}}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round"
+                    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                👁 Preview My Podium
+              </motion.a>
+              {!savedSlug && (
+                <p className="text-[10px] text-slate-600 mt-1.5 text-center">
+                  Set and save your slug first
+                </p>
+              )}
+            </div>
           </div>
-
-          <motion.button
-            onClick={handleSeed}
-            disabled={seeding || !creatorId}
-            className="w-full py-3 rounded-xl font-semibold text-sm
-                       bg-slate-950 border border-slate-700 text-slate-200
-                       hover:border-yellow-500/40 hover:shadow-[0_0_16px_rgba(234,179,8,0.1)]
-                       disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.97 }}
-          >
-            {seeding ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-slate-600 border-t-yellow-400 rounded-full animate-spin" />
-                Seeding…
-              </span>
-            ) : 'Seed my podium with sample fans'}
-          </motion.button>
 
           <AnimatePresence>
             {seedMsg && (
               <motion.p
+                key="seed-msg"
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0 }}
-                className={`text-sm text-center ${
-                  seedMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'
-                }`}
+                className={`text-sm text-center ${seedMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}
               >
                 {seedMsg}
               </motion.p>
@@ -557,8 +735,59 @@ export default function DashboardPage() {
           </AnimatePresence>
         </motion.section>
 
+        {/* ── SECTION 5: Plan Badge ─────────────────────────────────────────── */}
+        <motion.section
+          className="bg-slate-900 border border-slate-800 rounded-2xl p-6"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.34 }}
+        >
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-lg font-bold text-white">Your Plan</h3>
+                <span className={`inline-flex items-center gap-1.5 text-xs font-semibold
+                                 border px-3 py-1 rounded-full ${plan.badgeClass}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${plan.dotClass}`} />
+                  {plan.badge}
+                </span>
+              </div>
+              <p className={`text-sm font-semibold ${
+                planKey === 'founding' ? 'text-yellow-400' :
+                planKey === 'pro' ? 'text-purple-400' : 'text-slate-300'
+              }`}>
+                {plan.headline}
+              </p>
+              <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
+                {plan.body}
+              </p>
+            </div>
+
+            {plan.showUpgrade && (
+              <motion.button
+                className="px-5 py-2.5 rounded-xl font-semibold text-sm text-white
+                           bg-gradient-to-r from-purple-600 to-indigo-600
+                           hover:shadow-[0_0_20px_rgba(139,92,246,0.3)] transition-all flex-shrink-0"
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+              >
+                ⚡ Upgrade to Pro
+              </motion.button>
+            )}
+          </div>
+
+          {planKey === 'founding' && (
+            <div className="mt-4 bg-yellow-400/5 border border-yellow-400/15 rounded-xl px-4 py-3">
+              <p className="text-xs text-yellow-400/80 leading-relaxed">
+                🎖 Founding Creator status is invite-only and permanent.
+                Your 0% fee rate will never change — no matter what we charge new creators in the future.
+              </p>
+            </div>
+          )}
+        </motion.section>
+
         <p className="text-xs text-slate-700 text-center pb-8">
-          Creator Podium — Ego Podium
+          Creator Podium · Your fans compete for the top spot
         </p>
       </div>
     </div>
