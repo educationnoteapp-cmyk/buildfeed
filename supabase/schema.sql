@@ -118,3 +118,39 @@ create policy "Public can read bids"
 -- ------------------------------------------------------------
 alter publication supabase_realtime add table podium_spots;
 alter publication supabase_realtime add table bids;
+
+-- ------------------------------------------------------------
+-- Auth: link creators to Supabase auth users
+-- ------------------------------------------------------------
+alter table creators
+  add column if not exists auth_user_id uuid references auth.users(id);
+
+create unique index if not exists creators_auth_user_id_idx
+  on creators(auth_user_id);
+
+-- Allow nullable stripe keys for new creators who haven't connected yet
+alter table creators
+  alter column stripe_secret_key set default '',
+  alter column stripe_secret_key drop not null;
+
+alter table creators
+  alter column stripe_webhook_secret set default '',
+  alter column stripe_webhook_secret drop not null;
+
+-- ------------------------------------------------------------
+-- RLS policies: creators can only read/write their own row
+-- ------------------------------------------------------------
+-- Read own row
+create policy if not exists "Creators can read own row"
+  on creators for select
+  using (auth.uid() = auth_user_id);
+
+-- Insert own row (on first login)
+create policy if not exists "Creators can insert own row"
+  on creators for insert
+  with check (auth.uid() = auth_user_id);
+
+-- Update own row
+create policy if not exists "Creators can update own row"
+  on creators for update
+  using (auth.uid() = auth_user_id);

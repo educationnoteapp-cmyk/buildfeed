@@ -26,11 +26,16 @@ export async function middleware(request: NextRequest) {
 
   const { data: { session } } = await supabase.auth.getSession()
 
-  if (!session && request.nextUrl.pathname.startsWith('/studio')) {
+  const protectedPaths = ['/studio', '/dashboard', '/settings', '/saved', '/onboarding']
+  const isProtected = protectedPaths.some((p) => request.nextUrl.pathname.startsWith(p))
+
+  if (!session && isProtected) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
   return response
 }
 
-export const config = { matcher: ['/studio/:path*', '/settings', '/saved', '/onboarding'] }
+export const config = {
+  matcher: ['/studio/:path*', '/dashboard/:path*', '/settings', '/saved', '/onboarding'],
+}
