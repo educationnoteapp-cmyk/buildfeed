@@ -65,8 +65,7 @@ interface Analytics {
 interface CreatorRow {
   id: string;
   slug: string;
-  stripe_secret_key: string;
-  stripe_webhook_secret: string;
+  stripe_account_id: string | null;
   plan_type: string;
   auth_user_id: string;
 }
@@ -134,12 +133,9 @@ export default function DashboardPage() {
   const [savingSlug, setSavingSlug] = useState(false);
   const [slugMsg, setSlugMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  // Stripe section
-  const [stripeKey, setStripeKey] = useState('');
-  const [stripeWebhook, setStripeWebhook] = useState('');
+  // Stripe Connect section
   const [stripeConnected, setStripeConnected] = useState(false);
-  const [savingStripe, setSavingStripe] = useState(false);
-  const [stripeMsg, setStripeMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [stripeConnectMsg, setStripeConnectMsg] = useState<{ type: 'ok' | 'warn' | 'err'; text: string } | null>(null);
 
   // Analytics
   const [analytics, setAnalytics] = useState<Analytics>({
@@ -160,6 +156,28 @@ export default function DashboardPage() {
       setUser(session.user);
       setAuthLoading(false);
     });
+  }, []);
+
+  // ── Handle Stripe Connect callback query params ─────────────────────────
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get('stripe_connect');
+    if (!result) return;
+    if (result === 'success') {
+      setStripeConnectMsg({ type: 'ok', text: '✓ Stripe connected successfully!' });
+    } else if (result === 'cancelled') {
+      setStripeConnectMsg({ type: 'warn', text: 'Stripe connection cancelled.' });
+    } else if (result === 'error') {
+      const reason = params.get('reason') ?? 'unknown';
+      setStripeConnectMsg({ type: 'err', text: `Connection failed: ${reason}` });
+    }
+    // Clean up URL without reload
+    const url = new URL(window.location.href);
+    url.searchParams.delete('stripe_connect');
+    url.searchParams.delete('reason');
+    window.history.replaceState({}, '', url.toString());
+    setTimeout(() => setStripeConnectMsg(null), 6000);
   }, []);
 
   // ── Load / create creator row ──────────────────────────────────────────────
@@ -187,8 +205,6 @@ export default function DashboardPage() {
         .insert({
           auth_user_id: user!.id,
           slug: tempSlug,
-          stripe_secret_key: '',
-          stripe_webhook_secret: '',
         })
         .select()
         .single();
@@ -202,9 +218,7 @@ export default function DashboardPage() {
   function hydrate(row: CreatorRow) {
     setCreator(row);
     setSlug(row.slug ?? '');
-    setStripeKey(row.stripe_secret_key ?? '');
-    setStripeWebhook(row.stripe_webhook_secret ?? '');
-    setStripeConnected(!!(row.stripe_secret_key && row.stripe_webhook_secret));
+    setStripeConnected(!!row.stripe_account_id);
   }
 
   // ── Analytics ──────────────────────────────────────────────────────────────
@@ -259,31 +273,9 @@ export default function DashboardPage() {
     setSavingSlug(false);
   };
 
-  // ── Save Stripe keys ───────────────────────────────────────────────────────
-  const handleSaveStripe = async () => {
-    if (!stripeKey.trim() || !stripeWebhook.trim()) {
-      setStripeMsg({ type: 'err', text: 'Both keys are required' });
-      return;
-    }
-    setSavingStripe(true);
-    setStripeMsg(null);
-
-    const { error } = await supabase
-      .from('creators')
-      .update({
-        stripe_secret_key: stripeKey.trim(),
-        stripe_webhook_secret: stripeWebhook.trim(),
-      })
-      .eq('id', creator!.id);
-
-    if (error) {
-      setStripeMsg({ type: 'err', text: error.message });
-    } else {
-      setStripeConnected(true);
-      setStripeMsg({ type: 'ok', text: '✓ Connected' });
-      setTimeout(() => setStripeMsg(null), 3000);
-    }
-    setSavingStripe(false);
+  // ── Stripe Connect — redirect to OAuth flow ───────────────────────────────
+  const handleStripeConnect = () => {
+    window.location.href = '/api/stripe/connect';
   };
 
   // ── Seed fake bids ─────────────────────────────────────────────────────────
@@ -534,7 +526,7 @@ export default function DashboardPage() {
           </div>
         </motion.section>
 
-        {/* ── SECTION 2b: Stripe ────────────────────────────────────────────── */}
+        {/* ── SECTION 2b: Stripe Connect ────────────────────────────────────── */}
         <motion.section
           className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5"
           initial={{ opacity: 0, y: 16 }}
@@ -545,111 +537,86 @@ export default function DashboardPage() {
           <div className="flex items-start justify-between">
             <div>
               <h3 className="text-lg font-bold text-white">Connect Stripe</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Bring Your Own Stripe (BYOS)</p>
+              <p className="text-xs text-slate-500 mt-0.5">Stripe Connect — secure OAuth</p>
             </div>
-            {/* Connected / Not Connected badge */}
-            {stripeConnected ? (
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-green-400
-                               bg-green-500/10 border border-green-500/25 px-3 py-1.5 rounded-full">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
-                ✓ Connected
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-red-400
-                               bg-red-500/10 border border-red-500/25 px-3 py-1.5 rounded-full">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block" />
-                ⚠ Not Connected
-              </span>
-            )}
-          </div>
-
-          {/* BYOS callout */}
-          <div className="bg-indigo-950/40 rounded-xl px-4 py-3 border border-indigo-800/30">
-            <p className="text-sm text-white font-semibold">
-              💰 100% of payments go directly to YOU
-            </p>
-            <p className="text-xs text-slate-400 mt-1">
-              Connect your own Stripe account. Fans pay through your Stripe — we never touch your money.
-            </p>
-          </div>
-
-          {/* Secret key */}
-          <div>
-            <label className="text-[10px] text-slate-500 tracking-widest uppercase block mb-1.5 font-medium">
-              Stripe Secret Key
-            </label>
-            <div className="relative">
-              <input
-                type="password"
-                value={stripeKey}
-                onChange={(e) => { setStripeKey(e.target.value); setStripeConnected(false); setStripeMsg(null); }}
-                placeholder="sk_live_... or sk_test_..."
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3
-                           text-white placeholder:text-slate-600 text-sm font-mono
-                           focus:outline-none focus:border-indigo-500/60
-                           focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)] transition-all"
-              />
-              {stripeKey && (
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-green-500" />
-              )}
-            </div>
-          </div>
-
-          {/* Webhook secret */}
-          <div>
-            <label className="text-[10px] text-slate-500 tracking-widest uppercase block mb-1.5 font-medium">
-              Stripe Webhook Secret
-            </label>
-            <div className="relative">
-              <input
-                type="password"
-                value={stripeWebhook}
-                onChange={(e) => { setStripeWebhook(e.target.value); setStripeConnected(false); setStripeMsg(null); }}
-                placeholder="whsec_..."
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3
-                           text-white placeholder:text-slate-600 text-sm font-mono
-                           focus:outline-none focus:border-indigo-500/60
-                           focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)] transition-all"
-              />
-              {stripeWebhook && (
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-green-500" />
-              )}
-            </div>
-          </div>
-
-          {/* Save Stripe */}
-          <div className="flex items-center gap-3">
-            <motion.button
-              onClick={handleSaveStripe}
-              disabled={savingStripe || !creator}
-              className="px-5 py-2.5 min-h-[56px] rounded-xl font-semibold text-sm text-white
-                         bg-indigo-600 hover:bg-indigo-500
-                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-            >
-              {savingStripe ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Saving…
-                </span>
-              ) : 'Save Keys'}
-            </motion.button>
-
-            <AnimatePresence>
-              {stripeMsg && (
+            <AnimatePresence mode="wait">
+              {stripeConnected ? (
                 <motion.span
-                  key="stripe-msg"
-                  initial={{ opacity: 0, x: -6 }}
-                  animate={{ opacity: 1, x: 0 }}
+                  key="connected"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0 }}
-                  className={`text-sm font-medium ${stripeMsg.type === 'ok' ? 'text-green-400' : 'text-red-400'}`}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-green-400
+                             bg-green-500/10 border border-green-500/25 px-3 py-1.5 rounded-full"
                 >
-                  {stripeMsg.text}
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
+                  ✓ Connected
+                </motion.span>
+              ) : (
+                <motion.span
+                  key="disconnected"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-amber-400
+                             bg-amber-500/10 border border-amber-500/25 px-3 py-1.5 rounded-full"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+                  Not connected
                 </motion.span>
               )}
             </AnimatePresence>
           </div>
+
+          {/* Info callout */}
+          <div className="bg-indigo-950/40 rounded-xl px-4 py-3 border border-indigo-800/30">
+            <p className="text-sm text-white font-semibold">
+              💰 Payments land directly in your Stripe account
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              We use Stripe Connect OAuth — you never share any secret keys.
+              Authorize once and fans can start bidding immediately.
+            </p>
+          </div>
+
+          {/* Connect / Reconnect button */}
+          <motion.button
+            onClick={handleStripeConnect}
+            disabled={!creator}
+            className="w-full flex items-center justify-center gap-3 px-5 py-3.5 min-h-[56px]
+                       rounded-xl font-semibold text-sm
+                       bg-[#635BFF] hover:bg-[#4F46E5] text-white
+                       disabled:opacity-50 disabled:cursor-not-allowed transition-colors
+                       shadow-[0_4px_20px_rgba(99,91,255,0.3)]"
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+          >
+            {/* Stripe wordmark */}
+            <svg className="w-12 h-5 flex-shrink-0" viewBox="0 0 60 25" fill="white" aria-hidden>
+              <path d="M59.64 14.28h-8.06c.19 1.93 1.6 2.55 3.2 2.55 1.64 0 2.96-.37 4.05-.95v3.32a8.33 8.33 0 0 1-4.56 1.1c-4.01 0-6.83-2.5-6.83-7.48 0-4.19 2.39-7.52 6.3-7.52 3.92 0 5.96 3.28 5.96 7.5 0 .4-.04 1.26-.06 1.48zm-5.92-5.62c-1.03 0-2.17.73-2.17 2.58h4.25c0-1.85-1.07-2.58-2.08-2.58zM40.95 20.3c-1.44 0-2.32-.6-2.9-1.04l-.02 4.63-4.12.87V6.1h3.76l.08 1.02a4.7 4.7 0 0 1 3.23-1.29c2.9 0 5.62 2.6 5.62 7.4 0 5.23-2.7 7.07-5.65 7.07zM40 9.98c-.97 0-1.54.34-1.97.81l.02 6.12c.4.44.98.78 1.95.78 1.52 0 2.54-1.65 2.54-3.87 0-2.15-1.04-3.84-2.54-3.84zM28.24 5.7l4.13-.88V20h-4.13V5.7zm0-4.11 4.13-.88v3.36l-4.13.88V1.59zm-4.32 9.35v9.06H19.8V10.94h-1.96V7.5h1.96V5.99c0-3.45 1.41-5.01 5.15-5.01.93 0 2.08.07 2.8.2v3.4c-.55-.08-1.27-.12-1.74-.12-1.09 0-1.35.54-1.35 1.49V7.5h3.1l-.42 3.44h-2.68zm-9.56 4.72c0 1.37.54 1.87 1.81 1.87.63 0 1.28-.18 1.85-.43v3.24c-.63.29-1.78.56-2.82.56-3.12 0-4.97-1.66-4.97-5.05V9.35H8.07V6.1h2.16V3.41l4.13-.88V6.1h3.1l-.42 3.25h-2.68v5.31zM0 20V0l4.13.88V20H0z" />
+            </svg>
+            {stripeConnected ? 'Reconnect Stripe Account' : 'Connect with Stripe'}
+          </motion.button>
+
+          <AnimatePresence>
+            {stripeConnectMsg && (
+              <motion.p
+                key="connect-msg"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className={`text-sm font-medium rounded-xl px-4 py-3 border
+                  ${stripeConnectMsg.type === 'ok'
+                    ? 'text-green-400 bg-green-950/40 border-green-800/30'
+                    : stripeConnectMsg.type === 'warn'
+                    ? 'text-amber-400 bg-amber-950/40 border-amber-800/30'
+                    : 'text-red-400 bg-red-950/40 border-red-800/30'
+                  }`}
+              >
+                {stripeConnectMsg.text}
+              </motion.p>
+            )}
+          </AnimatePresence>
         </motion.section>
 
         {/* ── SECTION 4: Podium Controls ───────────────────────────────────── */}

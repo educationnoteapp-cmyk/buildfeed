@@ -14,143 +14,134 @@ create extension if not exists "pgcrypto";
 
 -- ------------------------------------------------------------
 -- creators
--- Stores one row per creator who signs up for The Creator Podium.
--- Each creator brings their own Stripe keys so payouts are direct.
+-- Stores one row per creator. Payments flow through Stripe Connect —
+-- we store the creator's connected account ID (acct_xxxxx) and use
+-- the platform secret key for charges with transfer_data.
 -- ------------------------------------------------------------
 create table if not exists creators (
-  id                    uuid primary key default gen_random_uuid(),
-  slug                  text unique not null,          -- used in URL: /<slug>
-  stripe_secret_key     text not null,                 -- creator's Stripe secret key
-  stripe_webhook_secret text not null,                 -- per-creator webhook signing secret
-  created_at            timestamptz not null default now()
+  id                uuid primary key default gen_random_uuid(),
+  slug              text unique not null,          -- public URL: /<slug>
+  stripe_account_id text,                          -- Stripe Connect acct_xxx (null until connected)
+  plan_type         text not null default 'starter',
+  auth_user_id      uuid references auth.users(id),
+  created_at        timestamptz not null default now()
 );
 
--- Index for fast slug lookups (public podium page route)
+-- Drop legacy BYOS columns if they still exist (idempotent migration)
+alter table creators drop column if exists stripe_secret_key;
+alter table creators drop column if exists stripe_webhook_secret;
+
+-- Indexes
 create index if not exists creators_slug_idx on creators (slug);
+create unique index if not exists creators_auth_user_id_idx on creators (auth_user_id);
 
 -- ------------------------------------------------------------
 -- podium_spots
--- Stores the CURRENT occupant of each position for each creator.
--- Only one row per (creator_id, position) pair at any time.
--- When a fan outbids another, the old row is replaced (UPDATE),
--- and a refund is NOT issued to the displaced fan.
+-- Current occupant of each position per creator.
+-- Only one row per (creator_id, position) at any time.
+-- Displaced fans lose their spot with NO REFUND.
 -- ------------------------------------------------------------
 create table if not exists podium_spots (
   id                        uuid primary key default gen_random_uuid(),
   creator_id                uuid not null references creators(id) on delete cascade,
-
-  -- Position 1–10. 1–3 = podium display, 4–10 = leaderboard.
   position                  smallint not null check (position between 1 and 10),
-
-  fan_handle                text not null,             -- e.g. "@alice"
-  fan_avatar_url            text,                      -- optional profile picture URL
-  message                   text,                      -- optional shoutout, pre-moderated
-  amount_paid               integer not null,           -- in cents (USD)
-  stripe_payment_intent_id  text not null unique,      -- for audit / dispute resolution
-
+  fan_handle                text not null,
+  fan_avatar_url            text,
+  message                   text,
+  amount_paid               integer not null,           -- cents (USD)
+  stripe_payment_intent_id  text not null unique,
   created_at                timestamptz not null default now(),
-
-  -- Enforce one occupant per position per creator at all times
   unique (creator_id, position)
 );
 
--- Index for fast leaderboard queries (order by position)
 create index if not exists podium_spots_creator_position_idx
   on podium_spots (creator_id, position asc);
 
 -- ------------------------------------------------------------
 -- bids (Financial Ledger)
--- Immutable log of every successful payment. Unlike podium_spots,
--- rows here are NEVER deleted or overwritten — they serve as the
--- source of truth for disputes, refund eligibility checks, and
--- analytics. Every time a fan is displaced from podium_spots, their
--- original bid record remains here for auditing.
+-- Immutable — rows are NEVER deleted or overwritten.
+-- Source of truth for disputes and analytics.
 -- ------------------------------------------------------------
 create table if not exists bids (
   id                        uuid primary key default gen_random_uuid(),
   creator_id                uuid references creators(id) on delete cascade,
   fan_handle                text not null,
   fan_avatar_url            text,
-  message                   text,                      -- pre-moderated via OpenAI
-  amount_paid               integer not null,           -- in cents (USD)
-  stripe_payment_intent_id  text unique not null,      -- idempotency key & audit trail
+  message                   text,
+  amount_paid               integer not null,           -- cents (USD)
+  stripe_payment_intent_id  text unique not null,
   created_at                timestamptz default now()
 );
 
--- Index for per-creator bid history queries (analytics / dashboard)
-create index if not exists bids_creator_id_idx on bids (creator_id, created_at desc);
+create index if not exists bids_creator_id_idx on bids (creator_id);
+create index if not exists bids_creator_amount_idx
+  on bids (creator_id, amount_paid desc);
 
 -- ------------------------------------------------------------
--- creators — plan_type column
--- Controls feature gating (e.g. max spots, custom branding).
--- 'starter' is the free tier; upgrade path: 'pro', 'elite'.
+-- site_settings
+-- Single-row global config (id is always 1).
+-- Controls whether new registrations are open (FOMO mode toggle).
 -- ------------------------------------------------------------
-alter table creators add column if not exists
-  plan_type text not null default 'starter';
+create table if not exists site_settings (
+  id                    integer primary key default 1,
+  is_registration_open  boolean not null default true
+);
 
--- ------------------------------------------------------------
--- Row-Level Security
--- Public can read podium spots (leaderboard is public).
--- Only service-role (API routes) can insert/update/delete.
--- ------------------------------------------------------------
-alter table creators enable row level security;
-alter table podium_spots enable row level security;
-alter table bids enable row level security;
-
--- Public read access for podium spots
-create policy "Public can read podium spots"
-  on podium_spots for select
-  using (true);
-
--- Public read access for bids (fans can see the bid history)
-create policy "Public can read bids"
-  on bids for select
-  using (true);
-
--- Service role has full access (bypasses RLS by default)
--- No additional policies needed for service role.
+insert into site_settings (id, is_registration_open)
+  values (1, true)
+  on conflict (id) do nothing;
 
 -- ------------------------------------------------------------
--- Supabase Realtime
--- Enables live leaderboard updates without polling.
--- podium_spots: fans see the board change instantly when outbid.
--- bids: dashboard can stream incoming payments in real time.
+-- waitlist
+-- Collected when is_registration_open = false.
+-- Creators/fans can apply for early access from the login page.
 -- ------------------------------------------------------------
-alter publication supabase_realtime add table podium_spots;
-alter publication supabase_realtime add table bids;
+create table if not exists waitlist (
+  id         uuid primary key default gen_random_uuid(),
+  email      text unique not null,
+  created_at timestamptz default now()
+);
 
 -- ------------------------------------------------------------
--- Auth: link creators to Supabase auth users
+-- Row Level Security
 -- ------------------------------------------------------------
-alter table creators
-  add column if not exists auth_user_id uuid references auth.users(id);
+alter table creators      enable row level security;
+alter table podium_spots  enable row level security;
+alter table bids          enable row level security;
+alter table site_settings enable row level security;
+alter table waitlist      enable row level security;
 
-create unique index if not exists creators_auth_user_id_idx
-  on creators(auth_user_id);
+-- Podium spots: public read
+create policy if not exists "Public can read podium spots"
+  on podium_spots for select using (true);
 
--- Allow nullable stripe keys for new creators who haven't connected yet
-alter table creators
-  alter column stripe_secret_key set default '',
-  alter column stripe_secret_key drop not null;
+-- Bids: public read
+create policy if not exists "Public can read bids"
+  on bids for select using (true);
 
-alter table creators
-  alter column stripe_webhook_secret set default '',
-  alter column stripe_webhook_secret drop not null;
+-- site_settings: public read (login page checks this without auth)
+create policy if not exists "Public can read site_settings"
+  on site_settings for select using (true);
 
--- ------------------------------------------------------------
--- RLS policies: creators can only read/write their own row
--- ------------------------------------------------------------
--- Read own row
+-- waitlist: anyone can insert (no auth required)
+create policy if not exists "Anyone can join waitlist"
+  on waitlist for insert with check (true);
+
+-- Creators: own-row access only
 create policy if not exists "Creators can read own row"
   on creators for select
   using (auth.uid() = auth_user_id);
 
--- Insert own row (on first login)
 create policy if not exists "Creators can insert own row"
   on creators for insert
   with check (auth.uid() = auth_user_id);
 
--- Update own row
 create policy if not exists "Creators can update own row"
   on creators for update
   using (auth.uid() = auth_user_id);
+
+-- ------------------------------------------------------------
+-- Supabase Realtime
+-- ------------------------------------------------------------
+alter publication supabase_realtime add table podium_spots;
+alter publication supabase_realtime add table bids;

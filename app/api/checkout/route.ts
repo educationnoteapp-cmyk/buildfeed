@@ -1,28 +1,30 @@
 // /api/checkout — creates a Stripe Checkout Session for a podium bid.
 //
-// BIDDING WAR FLOW:
+// STRIPE CONNECT FLOW:
 // 1. Receive { creatorSlug, fanHandle, message, amountCents } from the client.
-// 2. Fetch the creator's stripe_secret_key from Supabase (each creator has their own).
-// 3. Validate the bid amount meets the minimum ($5, or current #10 + $1 if board is full).
-// 4. Create a Stripe Checkout Session using the CREATOR'S Stripe key so the payment
-//    goes directly to the creator's account. Metadata is attached so the webhook
-//    can finalize the spot swap after payment succeeds.
-// 5. Return the checkout URL for client-side redirect.
+// 2. Fetch the creator's stripe_account_id from Supabase.
+// 3. Validate bid amount meets the minimum.
+// 4. Create a Checkout Session using the PLATFORM key with stripeAccount set to
+//    the creator's connected account so the payment lands directly in their Stripe.
+// 5. Apply platform application fee based on plan_type:
+//      founding | trial → 0% fee
+//      all others       → 15% fee
+// 6. Return the checkout URL for client-side redirect.
 
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { supabaseAdmin } from '@/lib/supabase';
-import { getCreatorStripe } from '@/lib/stripe';
+import { stripe } from '@/lib/stripe';
 import type { CheckoutPayload, CheckoutMetadata } from '@/types';
 
 const ABSOLUTE_MINIMUM_CENTS = 500; // $5
+const PLATFORM_FEE_PERCENT   = 0.15; // 15% for non-founding/non-trial plans
 
 export async function POST(req: NextRequest) {
   try {
     const body: CheckoutPayload = await req.json();
     const { creatorSlug, fanHandle, message, amountCents, fanAvatarUrl } = body;
 
-    // --- Validate input ---
     if (!creatorSlug || !fanHandle || !amountCents) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
@@ -30,7 +32,7 @@ export async function POST(req: NextRequest) {
     // --- Fetch creator ---
     const { data: creator, error: creatorError } = await supabaseAdmin
       .from('creators')
-      .select('id, slug, stripe_secret_key, stripe_webhook_secret')
+      .select('id, slug, stripe_account_id, plan_type')
       .eq('slug', creatorSlug)
       .single();
 
@@ -38,8 +40,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Creator not found' }, { status: 404 });
     }
 
+    // --- Ensure creator has connected Stripe ---
+    if (!creator.stripe_account_id) {
+      return NextResponse.json(
+        { error: 'Creator has not connected their Stripe account yet' },
+        { status: 402 }
+      );
+    }
+
     // --- Calculate minimum bid ---
-    // Fetch current top 10 bids to determine if board is full and what #10 pays
     const { data: topBids } = await supabaseAdmin
       .from('bids')
       .select('amount_paid')
@@ -49,7 +58,6 @@ export async function POST(req: NextRequest) {
 
     let minimumBidCents = ABSOLUTE_MINIMUM_CENTS;
     if (topBids && topBids.length >= 10) {
-      // Board is full — must outbid #10 by at least $1
       const lowestTopBid = topBids[topBids.length - 1].amount_paid;
       minimumBidCents = Math.max(ABSOLUTE_MINIMUM_CENTS, lowestTopBid + 100);
     }
@@ -61,25 +69,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // --- Create Stripe Checkout Session using the creator's own Stripe key ---
-    const creatorStripe = getCreatorStripe(creator.stripe_secret_key);
+    // --- Application fee logic ---
+    // founding and trial plans → 0% (reward early adopters)
+    // all other plans          → 15% platform fee
+    const isFeeExempt =
+      creator.plan_type === 'founding' || creator.plan_type === 'trial';
+    const applicationFeeAmount = isFeeExempt
+      ? 0
+      : Math.floor(amountCents * PLATFORM_FEE_PERCENT);
 
-    // Attach metadata so the webhook handler knows how to finalize the bid
+    // --- Build metadata ---
     const metadata: CheckoutMetadata = {
-      creator_id: creator.id,
-      fan_handle: fanHandle,
+      creator_id:    creator.id,
+      fan_handle:    fanHandle,
       fan_avatar_url: fanAvatarUrl || '',
-      message: message || '',
-      amount_cents: String(amountCents),
+      message:       message || '',
+      amount_cents:  String(amountCents),
     };
-
-    // Build the success/cancel URLs relative to the request origin
-    const origin = req.headers.get('origin') || req.nextUrl.origin;
-
-    // Cast CheckoutMetadata to Stripe.MetadataParam (both are string-value records)
     const stripeMetadata = metadata as unknown as Stripe.MetadataParam;
 
-    const session = await creatorStripe.checkout.sessions.create({
+    const origin = req.headers.get('origin') || req.nextUrl.origin;
+
+    // --- Create Stripe Checkout Session via Connect ---
+    // The platform key is used but payment lands in the creator's connected account.
+    const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: 'payment',
       line_items: [
         {
@@ -87,7 +100,7 @@ export async function POST(req: NextRequest) {
             currency: 'usd',
             unit_amount: amountCents,
             product_data: {
-              name: `Podium Bid — ${creator.slug}`,
+              name:        `Podium Bid — ${creator.slug}`,
               description: `Bid by ${fanHandle} for a spot on ${creator.slug}'s Ego Podium`,
             },
           },
@@ -96,12 +109,21 @@ export async function POST(req: NextRequest) {
       ],
       metadata: stripeMetadata,
       success_url: `${origin}/${creator.slug}?bid=success`,
-      cancel_url: `${origin}/${creator.slug}?bid=cancelled`,
-      // Attach metadata to payment_intent so the webhook can finalize the bid
+      cancel_url:  `${origin}/${creator.slug}?bid=cancelled`,
       payment_intent_data: {
-        metadata: stripeMetadata,
+        metadata:        stripeMetadata,
+        // Route payment to the creator's connected account
+        transfer_data: {
+          destination: creator.stripe_account_id,
+        },
+        // Collect platform fee (0 for founding/trial creators)
+        ...(applicationFeeAmount > 0 && {
+          application_fee_amount: applicationFeeAmount,
+        }),
       },
-    });
+    };
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
 
     return NextResponse.json({ url: session.url });
   } catch (error) {

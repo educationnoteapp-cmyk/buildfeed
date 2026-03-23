@@ -11,8 +11,7 @@
 export interface Creator {
   id: string;
   slug: string;
-  stripe_secret_key: string;
-  stripe_webhook_secret: string;
+  stripe_account_id: string | null;
   plan_type: string;
   created_at: string;
 }

@@ -9,6 +9,12 @@ import PlanActions from './PlanActions';
 import type { Bid } from '@/types';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
+interface WaitlistEntry {
+  id: string;
+  email: string;
+  created_at: string;
+}
+
 interface CreatorRow {
   id: string;
   slug: string;
@@ -100,6 +106,12 @@ export default function AdminPage() {
   const [creators,   setCreators]   = useState<CreatorRow[]>([]);
   const [recentBids, setRecentBids] = useState<RecentBid[]>([]);
 
+  // Registration & waitlist
+  const [regOpen,          setRegOpen]          = useState(true);
+  const [togglingReg,      setTogglingReg]       = useState(false);
+  const [waitlist,         setWaitlist]          = useState<WaitlistEntry[]>([]);
+  const [loadingWaitlist,  setLoadingWaitlist]   = useState(false);
+
   // ── Auth guard — check NEXT_PUBLIC_ADMIN_EMAIL ──────────────────────────
   useEffect(() => {
     getSession().then((session) => {
@@ -119,6 +131,23 @@ export default function AdminPage() {
   // ── Data loader ─────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     setLoading(true);
+
+    // Fetch registration status
+    const { data: siteSetting } = await supabase
+      .from('site_settings')
+      .select('is_registration_open')
+      .eq('id', 1)
+      .single();
+    setRegOpen(siteSetting?.is_registration_open ?? true);
+
+    // Fetch waitlist
+    setLoadingWaitlist(true);
+    const { data: wl } = await supabase
+      .from('waitlist')
+      .select('id, email, created_at')
+      .order('created_at', { ascending: false });
+    setWaitlist(wl ?? []);
+    setLoadingWaitlist(false);
 
     // Fetch all creators
     const { data: rawCreators } = await supabase
@@ -191,6 +220,33 @@ export default function AdminPage() {
     });
   }, []);
 
+  // ── Toggle registration open/closed ─────────────────────────────────────
+  const handleToggleRegistration = async () => {
+    setTogglingReg(true);
+    const newVal = !regOpen;
+    const { error } = await supabase
+      .from('site_settings')
+      .update({ is_registration_open: newVal })
+      .eq('id', 1);
+    if (!error) setRegOpen(newVal);
+    setTogglingReg(false);
+  };
+
+  // ── Export waitlist as CSV ────────────────────────────────────────────────
+  const handleExportCSV = () => {
+    const rows = [
+      'email,joined',
+      ...waitlist.map((e) => `"${e.email}","${new Date(e.created_at).toISOString()}"`),
+    ];
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `waitlist-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // ── Spinner while loading ─────────────────────────────────────────────────
   if (!ready || loading) {
     return (
@@ -247,6 +303,146 @@ export default function AdminPage() {
           <h1 className="text-3xl font-black">Creator Podium <span className="text-yellow-400">Admin</span></h1>
           <p className="text-slate-500 text-sm mt-1">Internal dashboard — 🔒 restricted access</p>
         </div>
+
+        {/* ══════════════════════════════════════════════════════════════════
+            SECTION 0a — REGISTRATION CONTROL
+        ══════════════════════════════════════════════════════════════════ */}
+        <section>
+          <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold mb-4">
+            Registration Gate
+          </p>
+
+          <motion.button
+            onClick={handleToggleRegistration}
+            disabled={togglingReg}
+            className={`w-full flex items-center justify-between gap-4 px-6 py-5 rounded-2xl border
+                        font-bold text-lg transition-all disabled:opacity-60 disabled:cursor-not-allowed
+                        ${regOpen
+                          ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300 hover:bg-emerald-950/50'
+                          : 'bg-red-950/30 border-red-500/30 text-red-300 hover:bg-red-950/50'
+                        }`}
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+          >
+            <AnimatePresence mode="wait">
+              {regOpen ? (
+                <motion.span
+                  key="open"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  className="flex items-center gap-3"
+                >
+                  <span className="text-2xl">🟢</span>
+                  <span>
+                    Registration <span className="text-white">OPEN</span>
+                    <span className="block text-sm font-normal text-slate-400 mt-0.5">
+                      Anyone can sign up via the login page
+                    </span>
+                  </span>
+                </motion.span>
+              ) : (
+                <motion.span
+                  key="closed"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  className="flex items-center gap-3"
+                >
+                  <span className="text-2xl">🔴</span>
+                  <span>
+                    Registration <span className="text-white">CLOSED</span>
+                    <span className="block text-sm font-normal text-slate-400 mt-0.5">
+                      FOMO Mode Active — new users see waitlist form
+                    </span>
+                  </span>
+                </motion.span>
+              )}
+            </AnimatePresence>
+
+            <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border flex-shrink-0
+              ${regOpen
+                ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/8'
+                : 'text-red-400 border-red-500/40 bg-red-500/8'
+              }`}
+            >
+              {togglingReg ? (
+                <motion.span
+                  className="w-3.5 h-3.5 border-2 border-slate-500 border-t-white rounded-full inline-block"
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 0.7, repeat: Infinity, ease: 'linear' }}
+                />
+              ) : regOpen ? 'Click to close' : 'Click to open'}
+            </span>
+          </motion.button>
+        </section>
+
+        {/* ══════════════════════════════════════════════════════════════════
+            SECTION 0b — WAITLIST
+        ══════════════════════════════════════════════════════════════════ */}
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold">
+              Waitlist ({waitlist.length})
+            </p>
+            {waitlist.length > 0 && (
+              <motion.button
+                onClick={handleExportCSV}
+                className="text-xs text-slate-400 hover:text-white transition-colors
+                           px-3 py-1.5 rounded-lg border border-slate-700 hover:border-slate-500
+                           flex items-center gap-1.5"
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+              >
+                ↓ Export CSV
+              </motion.button>
+            )}
+          </div>
+
+          {loadingWaitlist ? (
+            <div className="flex justify-center py-8">
+              <motion.div
+                className="w-6 h-6 border-2 border-slate-800 border-t-yellow-400 rounded-full"
+                animate={{ rotate: 360 }}
+                transition={{ duration: 0.85, repeat: Infinity, ease: 'linear' }}
+              />
+            </div>
+          ) : waitlist.length === 0 ? (
+            <div className="text-center py-10 text-slate-600 text-sm border border-slate-800 rounded-2xl">
+              No waitlist entries yet
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-slate-800 overflow-hidden">
+              {/* Header */}
+              <div className="hidden sm:grid grid-cols-[1fr_1fr] gap-3 px-4 py-2.5
+                              bg-slate-900 border-b border-slate-800
+                              text-[10px] text-slate-600 uppercase tracking-widest font-semibold">
+                <span>Email</span>
+                <span>Joined</span>
+              </div>
+
+              <div className="divide-y divide-slate-800/60 max-h-80 overflow-y-auto">
+                {waitlist.map((entry, i) => (
+                  <motion.div
+                    key={entry.id}
+                    initial={{ opacity: 0, x: -6 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.015 }}
+                    className="flex flex-col sm:grid sm:grid-cols-[1fr_1fr] gap-1 sm:gap-3
+                               px-4 py-3 items-start sm:items-center hover:bg-slate-900/40 transition-colors"
+                  >
+                    <p className="text-sm text-slate-300 font-mono truncate">{entry.email}</p>
+                    <p className="text-[11px] text-slate-600">
+                      {new Date(entry.created_at).toLocaleDateString('en-US', {
+                        month: 'short', day: 'numeric', year: '2-digit', hour: '2-digit', minute: '2-digit',
+                      })}
+                    </p>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
 
         {/* ══════════════════════════════════════════════════════════════════
             SECTION 1 — STATS OVERVIEW
